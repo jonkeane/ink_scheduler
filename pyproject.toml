@@ -1,0 +1,10 @@
+[project]
+name = "ink_scheduler"
+version = "0.1.0"
+requires-python = ">= 3.14.2"
+dependencies = [
+    "shiny",
+    "requests",
+    "pandas",
+    "numpy",
+]
