@@ -1,13 +1,19 @@
 from shiny import App, ui, render, reactive
-from datetime import datetime, timedelta
+from datetime import datetime
 import pandas as pd
 from calendar import monthrange
 import os
 from dotenv import load_dotenv
-from assignment_logic import create_yearly_assignments_with_inks, get_month_summary, parse_theme_from_comment
+from assignment_logic import (
+    create_explicit_assignments_only,
+    get_month_summary,
+    parse_theme_from_comment,
+    move_ink_assignment,
+)
 from api_client import fetch_all_collected_inks
 from llm_organizer import create_llm_chat, format_all_inks_for_llm
 from ink_cache import save_inks_to_cache, load_inks_from_cache, get_cache_info
+from chat_tools import create_tool_functions
 import traceback
 
 # Load environment variables from .env file
@@ -16,71 +22,151 @@ load_dotenv()
 # Get API token from environment (if available)
 DEFAULT_API_TOKEN = os.getenv("FPC_API_TOKEN", "")
 
-# App UI
 app_ui = ui.page_fluid(
-    ui.panel_title("Fountain Pen Ink Calendar"),
+    ui.include_css("styles.css"),
 
     ui.layout_sidebar(
         ui.sidebar(
-            ui.input_password("api_token", "API Token",
-                            value=DEFAULT_API_TOKEN,
-                            placeholder="Enter your API token"),
-            ui.input_action_button("fetch_inks", "Fetch My Inks", class_="btn-primary", style="width: 100%; margin-bottom: 5px;"),
-            ui.input_action_button("clear_token", "Clear Token", class_="btn-secondary", style="width: 100%; margin-bottom: 5px;"),
+            ui.input_action_button("fetch_inks", "Fetch My Inks", class_="btn-primary", style="width: 100%;"),
             ui.output_text("cache_status", inline=True),
-            ui.hr(),
-            ui.input_select("view_mode", "View Mode",
-                          choices=["Calendar View", "List View"],
-                          selected="Calendar View"),
-            ui.input_numeric("year", "Year", value=datetime.now().year,
-                           min=2020, max=2030),
-            ui.input_select("month", "Month",
-                          choices={str(i): datetime(2000, i, 1).strftime("%B")
-                                 for i in range(1, 13)},
-                          selected=str(datetime.now().month)),
-            ui.input_action_button("randomize", "Randomize Assignments",
-                                 class_="btn-secondary"),
-            width=300
+            ui.h4("AI Organizer"),
+            ui.chat_ui("ink_chat", height="400px"),
+            ui.output_text("session_status", inline=True),
+            ui.download_button("save_session", "Save Session", class_="btn-outline-secondary", style="width: 100%;"),
+            ui.input_file("load_session", None, accept=[".json"], button_label="Load Session", multiple=False),
+            ui.input_action_button("open_settings", "Settings", class_="btn-outline-secondary", style="width: 100%;"),
+            width=400
         ),
-        
-        ui.navset_tab(
+
+        ui.div(
+            ui.navset_tab(
             ui.nav_panel("Ink Calendar",
+                ui.div(
+                    ui.input_switch("view_mode", "List View", value=False, width="auto"),
+                    ui.input_action_button("prev_month", "←", class_="btn-secondary btn-sm", style="margin-left: 20px;"),
+                    ui.div(
+                        ui.output_ui("month_label"),
+                        ui.input_numeric("year", None, value=datetime.now().year,
+                                       min=2020, max=2035, width="3rem"),
+                        class_="month-year-container"
+                    ),
+                    ui.input_action_button("next_month", "→", class_="btn-secondary btn-sm"),
+                    ui.output_ui("theme_label"),
+                    style="display: flex; align-items: baseline; gap: 8px; margin-top: 15px;"
+                ),
                 ui.output_ui("main_view")
             ),
             ui.nav_panel("Ink Collection",
-                ui.output_data_frame("ink_table")
+                ui.input_text("ink_search", "Search inks:", placeholder="Type to filter by brand or name..."),
+                ui.output_ui("ink_collection_view")
             ),
             ui.nav_panel("Month Assignment",
                 ui.output_data_frame("month_assignment")
             ),
-            ui.nav_panel("🤖 LLM Organizer",
-                ui.div(
-                    ui.h3("AI-Powered Ink Organization"),
-                    ui.p("Chat with an LLM to organize your inks into monthly themes based on colors, seasons, and your preferences."),
-                    ui.input_select("llm_provider",
-                                   "LLM Provider",
-                                   choices={"openai": "GPT-4 (OpenAI)", "anthropic": "Claude (Anthropic)"},
-                                   selected="openai"),
-                    ui.input_action_button("reset_chat", "🆕 Reset Chat", class_="btn-secondary btn-sm", style="margin-bottom: 10px;"),
-                    ui.hr(),
-                    ui.chat_ui("ink_chat"),
-                    style="padding: 20px;"
-                )
-            )
-        )
+            id="main_tabs"
+        ),
+        ui.h2("Fountain Pen Ink Calendar", class_="page-title"),
+        class_="tabs-header-row"
+    )
     )
 )
 
+def ink_swatch_svg(color: str, size: str = "sm") -> ui.HTML:
+    """Generate an SVG ink swatch with organic watercolor blob shape.
+
+    Args:
+        color: The ink color (hex or CSS color)
+        size: "sm" for small (32x24), "lg" for large (80x50)
+    """
+    if size == "lg":
+        # Large square-ish swatch for calendar view
+        width, height = 80, 50
+        viewbox = "0 0 100 90"
+        path = """
+            M 12 25
+            C 5 22, 2 15, 8 8
+            C 15 2, 28 0, 42 4
+            C 52 1, 62 0, 75 5
+            C 88 2, 96 10, 98 22
+            C 100 35, 98 48, 95 60
+            C 98 72, 94 82, 82 88
+            C 70 92, 55 90, 42 86
+            C 28 90, 15 88, 8 78
+            C 2 68, 0 55, 4 42
+            C 0 30, 5 22, 12 25
+            Z
+        """
+    else:
+        # Small swatch for list views
+        width, height = 32, 24
+        viewbox = "0 0 100 75"
+        path = """
+            M 15 20
+            C 8 18, 5 12, 12 8
+            C 18 4, 28 2, 38 5
+            C 48 3, 55 1, 65 4
+            C 75 2, 85 6, 92 12
+            C 98 18, 100 28, 97 38
+            C 100 48, 98 58, 92 65
+            C 86 72, 75 75, 62 73
+            C 50 76, 38 74, 28 70
+            C 18 74, 8 70, 4 62
+            C 0 54, 2 42, 5 32
+            C 2 24, 6 18, 15 20
+            Z
+        """
+
+    svg = f'''<svg width="{width}" height="{height}" viewBox="{viewbox}" xmlns="http://www.w3.org/2000/svg">
+        <path fill="{color}" d="{path}"/>
+    </svg>'''
+    return ui.HTML(svg)
 
 def server(input, output, session):
+    # Reactive value for cache status
+    cache_status = reactive.Value("No cache loaded")
+    
+    # Reactive value for current month (since we removed the input selector)
+    current_month = reactive.Value(datetime.now().month)
+    
+    # Create Shiny chat interface (must be inside server function)
+    chat = ui.Chat(id="ink_chat", messages=[])
+    
+    # Show settings modal when button is clicked
+    @reactive.Effect
+    @reactive.event(input.open_settings)
+    def show_settings():
+        m = ui.modal(
+            ui.input_password("api_token", "API Token",
+                            value=DEFAULT_API_TOKEN,
+                            placeholder="Enter your API token"),
+            ui.hr(),
+            ui.input_select("llm_provider", "LLM Provider",
+                          choices=["openai", "anthropic", "google"],
+                          selected="openai"),
+            ui.input_password("llm_api_key", "LLM API Key",
+                            placeholder="Enter your LLM API key"),
+            ui.input_action_button("clear_token", "Clear Token", class_="btn-secondary", style="width: 100%; margin-bottom: 10px;"),
+            title="Settings",
+            easy_close=True,
+            footer=ui.input_action_button("close_settings", "Save & Close", class_="btn-primary")
+        )
+        ui.modal_show(m)
+
+    # Close settings modal when Save & Close is clicked
+    @reactive.Effect
+    @reactive.event(input.close_settings)
+    def close_settings():
+        ui.modal_remove()
+        ui.notification_show("Settings saved", type="message", duration=2)
+    
     # Reactive values to store data
     ink_data = reactive.Value([])
-    random_seed = reactive.Value(None)  # Seed for randomization
+    api_assignments = reactive.Value({})  # Assignments from API cache (protected, read-only)
+    session_assignments = reactive.Value({})  # Experimental assignments (editable, not auto-persisted)
     llm_chat_instance = reactive.Value(None)  # Store LLM chat instance
     chat_initialized = reactive.Value(False)  # Track if chat has been initialized
-
-    # Create Shiny chat interface
-    chat = ui.Chat(id="ink_chat", messages=[])
+    selected_year = reactive.Value(datetime.now().year)  # Track selected year for LLM tools
+    ink_picker_date = reactive.Value(None)  # Track which date's ink picker is open
 
     # Load inks from cache on startup
     @reactive.Effect
@@ -90,6 +176,48 @@ def server(input, output, session):
             inks = cache.get("inks", [])
             ink_data.set(inks)
             ui.notification_show(f"Loaded {len(inks)} inks from cache", type="message", duration=3)
+
+    # Update API assignments when ink_data changes (these are protected/read-only)
+    @reactive.Effect
+    @reactive.event(ink_data)
+    def sync_api_assignments_from_ink_data():
+        inks = ink_data.get()
+        year = input.year()
+        if not inks:
+            api_assignments.set({})
+            return
+
+        # Get explicit assignments from API cache - these are protected
+        explicit = create_explicit_assignments_only(inks, year)
+
+        api_assignments.set(explicit)
+
+    # Update API assignments when year changes
+    @reactive.Effect
+    @reactive.event(input.year)
+    def sync_api_assignments_from_year():
+        inks = ink_data.get()
+        if not inks:
+            api_assignments.set({})
+            return
+
+        year = input.year()
+
+        # Get explicit assignments from API cache
+        explicit = create_explicit_assignments_only(inks, year)
+
+        # Update API assignments and clear session assignments for new year
+        api_assignments.set(explicit)
+        session_assignments.set({})  # Clear session when year changes
+
+    # Helper to get merged assignments (API takes precedence over session)
+    def get_merged_assignments_dict():
+        """Merge session and API assignments. API assignments take precedence."""
+        api = api_assignments.get()
+        session = session_assignments.get()
+        # Session first, then API overwrites (API takes precedence)
+        merged = {**session, **api}
+        return merged
     
     # Cache status display
     @output
@@ -98,6 +226,44 @@ def server(input, output, session):
         info = get_cache_info()
         return info if info else "No cache"
 
+    # Session status display
+    @output
+    @render.text
+    def session_status():
+        session = session_assignments.get()
+        api = api_assignments.get()
+        if not session and not api:
+            return "No assignments"
+        return f"{len(api)} API + {len(session)} session"
+
+    # Save session as downloadable file
+    @render.download(filename=lambda: f"session_{input.year()}.json")
+    def save_session():
+        import json
+        session = session_assignments.get()
+        if not session:
+            ui.notification_show("No session assignments to save", type="warning")
+            return
+        yield json.dumps(session, indent=2)
+
+    # Load session from uploaded file
+    @reactive.Effect
+    @reactive.event(input.load_session)
+    def handle_load_session():
+        import json
+        file_info = input.load_session()
+        if not file_info:
+            return
+
+        try:
+            file_path = file_info[0]["datapath"]
+            with open(file_path, "r") as f:
+                loaded = json.load(f)
+            session_assignments.set(loaded)
+            ui.notification_show(f"Loaded {len(loaded)} assignments", type="message")
+        except Exception as e:
+            ui.notification_show(f"Error loading file: {str(e)}", type="error")
+
     # Clear API token
     @reactive.Effect
     @reactive.event(input.clear_token)
@@ -105,43 +271,89 @@ def server(input, output, session):
         ui.update_text("api_token", value="")
         ui.notification_show("API token cleared", type="message")
 
+    # Month label for header
+    @output
+    @render.ui
+    def month_label():
+        year = input.year()
+        month = current_month.get()
+        month_name = datetime(year, month, 1).strftime("%B")
+        return ui.span(month_name, style="font-weight: 600; font-size: 1.1em;")
+
+    # Theme label for header
+    @output
+    @render.ui
+    def theme_label():
+        inks = ink_data.get()
+        if not inks:
+            return ui.span()
+
+        year = input.year()
+        month = current_month.get()
+        daily = get_daily_assignments()
+
+        first_day_str = f"{year}-{month:02d}-01"
+        first_day_ink_idx = daily.get(first_day_str)
+
+        if first_day_ink_idx is None or first_day_ink_idx >= len(inks):
+            return ui.span()
+
+        first_day_ink = inks[first_day_ink_idx]
+        private_comment = first_day_ink.get("private_comment", "")
+        theme_info = parse_theme_from_comment(private_comment, year)
+
+        if not theme_info:
+            return ui.span()
+
+        return ui.span(
+            ui.strong(theme_info["theme"], style="color: #555;"),
+            ui.span(" — ", style="color: #999;"),
+            ui.span(theme_info["theme_description"], style="color: #777; font-style: italic;"),
+            style="margin-left: 15px; padding-left: 15px; border-left: 2px solid #ddd;"
+        )
+
     # Navigate to previous month
     @reactive.Effect
     @reactive.event(input.prev_month)
     def prev_month():
         current_year = input.year()
-        current_month = int(input.month())
+        month = current_month.get()
 
-        if current_month == 1:
+        if month == 1:
             # Go to December of previous year
             ui.update_numeric("year", value=current_year - 1)
-            ui.update_select("month", selected="12")
+            current_month.set(12)
         else:
             # Go to previous month
-            ui.update_select("month", selected=str(current_month - 1))
+            current_month.set(month - 1)
 
     # Navigate to next month
     @reactive.Effect
     @reactive.event(input.next_month)
     def next_month():
         current_year = input.year()
-        current_month = int(input.month())
+        month = current_month.get()
 
-        if current_month == 12:
+        if month == 12:
             # Go to January of next year
             ui.update_numeric("year", value=current_year + 1)
-            ui.update_select("month", selected="1")
+            current_month.set(1)
         else:
             # Go to next month
-            ui.update_select("month", selected=str(current_month + 1))
+            current_month.set(month + 1)
 
     # Fetch inks from API with pagination
     @reactive.Effect
     @reactive.event(input.fetch_inks)
     def fetch_inks():
-        token = input.api_token()
+        try:
+            token = input.api_token()
+        except Exception:
+            # Try to get from environment variable if input not available
+            token = DEFAULT_API_TOKEN
+
         if not token:
-            ui.notification_show("Please enter an API token", type="error")
+            ui.notification_show("Please enter an API token in Settings", type="error")
             return
 
         try:
@@ -150,10 +362,12 @@ def server(input, output, session):
 
             # Fetch all pages of inks
             inks = fetch_all_collected_inks(token)
-            ink_data.set(inks)
 
-            # Save to cache
+            # Save to cache FIRST (before setting reactive value)
             save_inks_to_cache(inks)
+
+            # Then update reactive value
+            ink_data.set(inks)
 
             # Remove loading notification and show success
             ui.notification_remove("fetch_loading")
@@ -164,51 +378,374 @@ def server(input, output, session):
         except Exception as e:
             ui.notification_remove("fetch_loading")
             ui.notification_show(f"Error fetching inks: {str(e)}", type="error")
-    
-    # Assign inks to every day of the year (no repeats)
-    # This is now a reactive calculation that updates when year, ink data, or seed changes
-    @reactive.Calc
-    def get_yearly_assignments():
-        inks = ink_data.get()
-        if not inks:
-            return {}
 
-        year = input.year()
-        seed = random_seed.get()
-
-        # Use the assignment logic that respects explicit date assignments in comments
-        assignments = create_yearly_assignments_with_inks(inks, year, seed=seed)
-
-        return assignments
-    
-    # Randomize yearly assignments
-    @reactive.Effect
-    @reactive.event(input.randomize)
-    def randomize_assignments():
-        if not ink_data.get():
-            ui.notification_show("Please fetch inks first", type="warning")
-            return
-
-        # Change the seed to trigger recalculation with new random assignments
-        import random
-        random_seed.set(random.randint(0, 1000000))
-        ui.notification_show("Ink assignments randomized!", type="message")
-    
-    # Get daily assignments for the selected month
+    # Get daily assignments for the selected month (merged view)
     @reactive.Calc
     def get_daily_assignments():
-        return get_yearly_assignments()
-    
+        # Update selected_year when year input changes
+        selected_year.set(input.year())
+        merged = get_merged_assignments_dict()
+        return merged
+
+    # Track button clicks for remove buttons
+    _remove_button_clicks = {}
+
+    @reactive.Effect
+    def observe_remove_buttons():
+        """Handle remove button clicks in list view."""
+        year = input.year()
+        month = current_month.get()
+        num_days = monthrange(year, month)[1]
+
+        for day in range(1, num_days + 1):
+            date_str = f"{year}-{month:02d}-{day:02d}"
+            button_id = f"remove_{date_str.replace('-', '_')}"
+
+            try:
+                current_clicks = getattr(input, button_id, lambda: 0)()
+                prev_clicks = _remove_button_clicks.get(button_id, 0)
+
+                if current_clicks > prev_clicks:
+                    _remove_button_clicks[button_id] = current_clicks
+                    new_session, result = move_ink_assignment(
+                        session=session_assignments.get(),
+                        api=api_assignments.get(),
+                        from_date=date_str,
+                        to_date=None,
+                        inks=ink_data.get()
+                    )
+                    if result.success:
+                        session_assignments.set(new_session)
+                    else:
+                        ui.notification_show(result.message, type="warning", duration=4)
+            except:
+                pass
+
+    # Track previous date values for ink collection date pickers
+    _ink_collection_prev_dates = {}
+
+    # Track button clicks for assign buttons
+    _assign_button_clicks = {}
+
+    # Dynamic observer for assign buttons (ink bottle icons)
+    @reactive.Effect
+    def observe_assign_buttons():
+        """Watch assign buttons and show ink picker modal when clicked."""
+        year = input.year()
+        month = current_month.get()
+        num_days = monthrange(year, month)[1]
+
+        with reactive.isolate():
+            daily = get_daily_assignments()
+
+        for day in range(1, num_days + 1):
+            date_str = f"{year}-{month:02d}-{day:02d}"
+            button_id = f"assign_{date_str.replace('-', '_')}"
+
+            # Skip assigned days
+            if date_str in daily:
+                continue
+
+            try:
+                current_clicks = getattr(input, button_id, lambda: 0)()
+                prev_clicks = _assign_button_clicks.get(button_id, 0)
+
+                if current_clicks > prev_clicks:
+                    _assign_button_clicks[button_id] = current_clicks
+                    # Show ink picker modal for this date
+                    ink_picker_date.set(date_str)
+                    show_ink_picker_modal(date_str)
+            except Exception:
+                pass
+
+    # Track modal state - "ready" becomes True after seeing empty placeholder
+    _modal_state = {"ready": False}
+
+    def show_ink_picker_modal(date_str):
+        """Show the ink picker modal for a specific date."""
+        # Mark not ready until we see empty placeholder (avoids stale values)
+        _modal_state["ready"] = False
+
+        inks = ink_data.get()
+        daily = get_daily_assignments()
+        assigned_indices = set(daily.values())
+
+        # Build choices for unassigned inks only
+        unassigned_inks = {"": "Select an ink..."} | {
+            str(i): f"{ink.get('brand_name', 'Unknown')} - {ink.get('name', 'Unknown')}"
+            for i, ink in enumerate(inks)
+            if i not in assigned_indices
+        }
+
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+        date_display = date_obj.strftime("%B %d, %Y")
+
+        m = ui.modal(
+            ui.p(f"Assign ink to {date_display}:"),
+            ui.input_selectize(
+                "modal_ink_select",
+                None,
+                choices=unassigned_inks,
+                selected="",
+                width="100%"
+            ),
+            title="Assign Ink",
+            easy_close=True,
+            footer=None,
+            size="s"
+        )
+        ui.modal_show(m)
+
+    # Handler for modal ink selection - auto-assign on selection
+    @reactive.Effect
+    def handle_modal_ink_selection():
+        """Auto-assign ink when selection is made in modal."""
+        date_str = ink_picker_date.get()
+        if not date_str:
+            return
+
+        try:
+            current_val = input.modal_ink_select()
+        except Exception:
+            return
+
+        # Wait until we see the empty placeholder value before accepting selections
+        # This ensures we don't process stale values from a previous modal
+        if not current_val:
+            _modal_state["ready"] = True
+            return
+
+        # Only process if modal is ready (has seen empty value first)
+        if not _modal_state["ready"]:
+            return
+
+        try:
+            ink_idx = int(current_val)
+        except ValueError:
+            return
+
+        # Mark not ready to prevent double-processing
+        _modal_state["ready"] = False
+
+        # Use unified move function (assign = from_date=None)
+        session = session_assignments.get()
+        api = api_assignments.get()
+        inks = ink_data.get()
+
+        new_session, result = move_ink_assignment(
+            session=session,
+            api=api,
+            from_date=None,
+            to_date=date_str,
+            ink_idx=ink_idx,
+            inks=inks
+        )
+
+        if not result.success:
+            ui.notification_show(result.message, type="warning", duration=3)
+            return
+
+        session_assignments.set(new_session)
+        ink_name = result.data.get("ink_name", "ink")
+        ui.notification_show(f"Assigned {ink_name}", type="message", duration=2)
+
+        # Close the modal and reset state
+        ui.modal_remove()
+        ink_picker_date.set(None)
+
+    # Track previous date values for inline date pickers (use dict, not reactive)
+    _prev_date_values = {}
+
+    # Dynamic observer for inline date pickers (to change assignment dates)
+    @reactive.Effect
+    def observe_date_pickers():
+        """Set up observers for inline date pickers."""
+        year = input.year()
+        month = current_month.get()
+        num_days = monthrange(year, month)[1]
+
+        # Use isolate to read without creating dependency (prevents infinite loop)
+        with reactive.isolate():
+            session = session_assignments.get()
+            api = api_assignments.get()
+
+        # PHASE 1: Read ALL date inputs to establish reactive dependencies
+        input_values = {}
+        for day in range(1, num_days + 1):
+            date_str = f"{year}-{month:02d}-{day:02d}"
+            date_input_id = f"date_{date_str.replace('-', '_')}"
+            try:
+                # Read the input to create reactive dependency
+                val = getattr(input, date_input_id, lambda: None)()
+                if val:
+                    input_values[date_str] = val
+            except Exception:
+                pass
+
+        # PHASE 2: Process changes for session assignments only
+        inks = ink_data.get()
+        for date_str, new_date_value in input_values.items():
+            # Only process session assignments (not API protected)
+            if date_str not in session or date_str in api:
+                continue
+
+            date_input_id = f"date_{date_str.replace('-', '_')}"
+
+            try:
+                new_date_str = new_date_value.strftime("%Y-%m-%d")
+                prev_value = _prev_date_values.get(date_str)
+
+                # Check if date actually changed (not just initial render)
+                if prev_value is not None and new_date_str != date_str:
+                    # Use unified move function - it derives ink_idx from session
+                    new_session, result = move_ink_assignment(
+                        session=session,
+                        api=api,
+                        from_date=date_str,
+                        to_date=new_date_str,
+                        inks=inks
+                    )
+
+                    if not result.success:
+                        # Show error and reset date picker
+                        ui.notification_show(result.message, type="warning", duration=3)
+                        ui.update_date(date_input_id, value=date_str)
+                        continue
+
+                    # Update reactive state
+                    session_assignments.set(new_session)
+
+                    # Update tracking for displaced ink if any
+                    if result.data.get("displaced_ink_idx") is not None:
+                        _prev_date_values[new_date_str] = None
+
+                    # Update tracking for moved ink
+                    del _prev_date_values[date_str]
+                    _prev_date_values[new_date_str] = new_date_str
+
+                    ink_name = result.data.get("ink_name", "ink")
+                    ui.notification_show(f"Moved {ink_name} to {new_date_str}", type="message", duration=3)
+                    return  # Exit after one change to avoid cascade
+
+                # Update tracked value
+                _prev_date_values[date_str] = new_date_str
+
+            except Exception:
+                pass
+
+    # Dynamic observer for ink collection date changes and remove buttons
+    @reactive.Effect
+    def observe_ink_collection_changes():
+        """Handle date picker changes and remove buttons in ink collection."""
+        inks = ink_data.get()
+        if not inks:
+            return
+
+        # Use isolate to read without creating dependency (prevents infinite loop)
+        with reactive.isolate():
+            daily = get_daily_assignments()
+            api = api_assignments.get()
+            session = session_assignments.get()
+        ink_to_date = {idx: date_str for date_str, idx in daily.items()}
+
+        # PHASE 1: Read ALL inputs to establish reactive dependencies
+        input_values = {}
+        remove_clicks = {}
+        for idx in range(len(inks)):
+            try:
+                current_date = ink_to_date.get(idx)
+                if current_date and current_date in api:
+                    continue
+                date_input_id = f"ink_date_{idx}"
+                remove_btn_id = f"ink_remove_{idx}"
+                input_values[idx] = getattr(input, date_input_id, lambda: None)()
+                remove_clicks[idx] = getattr(input, remove_btn_id, lambda: 0)()
+            except Exception:
+                pass
+
+        # PHASE 2: Process changes (only handle first change found)
+        change_processed = False
+        for idx in range(len(inks)):
+            current_date = ink_to_date.get(idx)
+            if current_date and current_date in api:
+                continue
+
+            try:
+                # Handle remove button (only for session assignments)
+                if not change_processed and current_date and remove_clicks.get(idx, 0) > 0:
+                    # Unassign - function derives ink_idx from session
+                    new_session, result = move_ink_assignment(
+                        session=session,
+                        api=api,
+                        from_date=current_date,
+                        to_date=None,
+                        inks=inks
+                    )
+
+                    if result.success:
+                        session_assignments.set(new_session)
+                        ink_name = result.data.get("ink_name", "ink")
+                        ui.notification_show(f"Removed {ink_name}", type="message", duration=3)
+                        change_processed = True
+                    continue
+
+                # Handle date picker changes
+                new_date_value = input_values.get(idx)
+                if not new_date_value:
+                    _ink_collection_prev_dates[idx] = None
+                    continue
+
+                new_date_str = new_date_value.strftime("%Y-%m-%d")
+                prev_value = _ink_collection_prev_dates.get(idx)
+
+                # Check if this is a real change (not initial render)
+                is_new_assignment = not current_date and prev_value is None
+                is_date_change = prev_value is not None and new_date_str != prev_value
+
+                if not change_processed and (is_new_assignment or is_date_change):
+                    # Use unified move function (handles assign, move, and validation)
+                    # Pass ink_idx for new assignments (current_date=None), otherwise derived
+                    new_session, result = move_ink_assignment(
+                        session=session,
+                        api=api,
+                        from_date=current_date,  # None for new assignment
+                        to_date=new_date_str,
+                        ink_idx=idx if current_date is None else None,
+                        inks=inks
+                    )
+
+                    if not result.success:
+                        ui.notification_show(result.message, type="warning", duration=3)
+                        ui.update_date(f"ink_date_{idx}", value="")
+                        continue
+
+                    # Update tracking for displaced ink if any
+                    if result.data.get("displaced_ink_idx") is not None:
+                        _ink_collection_prev_dates[result.data["displaced_ink_idx"]] = None
+
+                    session_assignments.set(new_session)
+                    ink_name = result.data.get("ink_name", "ink")
+                    action = "Moved" if current_date else "Assigned"
+                    ui.notification_show(f"{action} {ink_name} to {new_date_str}", type="message", duration=3)
+                    _ink_collection_prev_dates[idx] = new_date_str
+                    change_processed = True
+                    continue
+
+                _ink_collection_prev_dates[idx] = new_date_str
+
+            except Exception:
+                pass
+
     # Main view output
     @output
     @render.ui
     def main_view():
-        mode = input.view_mode()
+        is_list_view = input.view_mode()
         
-        if mode == "Calendar View":
-            return calendar_view()
-        else:
+        if is_list_view:
             return list_view()
+        else:
+            return calendar_view()
     
     # Calendar view
     def calendar_view():
@@ -218,48 +755,10 @@ def server(input, output, session):
 
         daily = get_daily_assignments()
         year = input.year()
-        month = int(input.month())
+        month = current_month.get()  # Use reactive value instead of input
 
         num_days = monthrange(year, month)[1]
         first_weekday = datetime(year, month, 1).weekday()
-
-        # Month/Year title with navigation
-        month_name = datetime(year, month, 1).strftime("%B %Y")
-
-        # Get theme from first day of month
-        first_day_str = f"{year}-{month:02d}-01"
-        first_day_ink_idx = daily.get(first_day_str)
-        theme_info = None
-
-        if first_day_ink_idx is not None and first_day_ink_idx < len(inks):
-            first_day_ink = inks[first_day_ink_idx]
-            comment = first_day_ink.get("comment", "")
-            theme_info = parse_theme_from_comment(comment, year)
-
-        # Build title with theme if available
-        title_components = [
-            ui.input_action_button("prev_month", "← Previous", class_="btn-secondary btn-sm"),
-            ui.h2(month_name, style="margin: 0 20px; display: inline-block;"),
-            ui.input_action_button("next_month", "Next →", class_="btn-secondary btn-sm"),
-        ]
-
-        title_nav = ui.div(
-            ui.div(*title_components, style="display: flex; align-items: center; justify-content: center;"),
-            style="margin-bottom: 10px;"
-        )
-
-        # Add theme display if available
-        if theme_info:
-            theme_display = ui.div(
-                ui.div(
-                    ui.strong(theme_info["theme"], style="font-size: 1.2em; color: #333;"),
-                    ui.br(),
-                    ui.span(theme_info["theme_description"], style="font-size: 0.95em; color: #666; font-style: italic;"),
-                    style="text-align: center; padding: 15px; background-color: #f8f9fa; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #007bff;"
-                )
-            )
-        else:
-            theme_display = ui.div()
 
         # Build calendar grid
         weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -271,8 +770,8 @@ def server(input, output, session):
             style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px;"
         )
         
-        # Calendar days
-        cells = [""] * first_weekday  # Empty cells before first day
+        # Calendar days - use actual empty divs for grid cells before first day
+        cells = [ui.div(style="min-height: 100px;") for _ in range(first_weekday)]
         
         for day in range(1, num_days + 1):
             date_str = f"{year}-{month:02d}-{day:02d}"
@@ -284,27 +783,46 @@ def server(input, output, session):
                 brand = ink.get("brand_name", "")
                 ink_color = ink.get("color", "#cccccc")
 
-                # Create a rustic ink swatch with subtle texture
-                swatch_style = f"""
-                    background: linear-gradient(135deg, {ink_color} 0%, {ink_color}dd 100%);
-                    width: 40px;
-                    height: 40px;
-                    border-radius: 4px;
-                    border: 2px solid #8884;
-                    box-shadow: 2px 2px 4px rgba(0,0,0,0.2), inset 1px 1px 2px rgba(255,255,255,0.3);
-                    margin-bottom: 8px;
-                """
+                # Can delete if it's a session assignment (not from API)
+                api = api_assignments.get()
+                session = session_assignments.get()
+                can_delete = date_str in session and date_str not in api
 
-                cell_content = ui.div(
+                # Build cell content with optional remove button
+                cell_components = [
                     ui.div(
-                        ui.strong(str(day)),
-                        style="font-size: 0.9em; margin-bottom: 5px;"
+                        ui.strong(str(day), style="font-size: 0.9em;"),
+                        ui.div(ink_swatch_svg(ink_color, "lg")),
+                        style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px;"
                     ),
-                    ui.div(style=swatch_style),
                     ui.span(brand, style="font-size: 0.75em; color: #666; display: block;"),
-                    ui.span(ink_name, style="font-size: 0.85em; font-weight: 500; display: block; margin-top: 2px;"),
-                    style="border: 1px solid #ddd; padding: 10px; min-height: 120px; background-color: #f9f9f9;"
+                    ui.span(ink_name, style="font-size: 0.85em; font-weight: 500; display: block; margin-top: 2px;")
+                ]
+
+                # Build the main content div
+                main_content = ui.div(
+                    *cell_components,
+                    style="padding: 10px;"
                 )
+
+                # Build the cell with optional remove button overlay
+                if can_delete:
+                    remove_btn = ui.input_action_button(
+                        f"remove_{date_str.replace('-', '_')}",
+                        "✕",
+                        class_="btn-sm",
+                        style="position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; padding: 0; border-radius: 50%; background-color: #999; color: white; border: none; font-size: 0.7em; line-height: 20px; text-align: center;"
+                    )
+                    cell_content = ui.div(
+                        remove_btn,
+                        main_content,
+                        style="position: relative; border: 1px solid #ddd; min-height: 120px; background-color: #f9f9f9;"
+                    )
+                else:
+                    cell_content = ui.div(
+                        main_content,
+                        style="border: 1px solid #ddd; min-height: 120px; background-color: #f9f9f9;"
+                    )
             else:
                 cell_content = ui.div(
                     ui.strong(str(day)),
@@ -313,16 +831,16 @@ def server(input, output, session):
             
             cells.append(cell_content)
         
-        # Fill remaining cells
+        # Fill remaining cells with empty divs
         while len(cells) % 7 != 0:
-            cells.append("")
+            cells.append(ui.div(style="min-height: 100px;"))
         
         calendar_grid = ui.div(
             *cells,
             style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px;"
         )
 
-        return ui.div(title_nav, theme_display, header, calendar_grid)
+        return ui.div(header, calendar_grid)
     
     # List view
     def list_view():
@@ -332,70 +850,219 @@ def server(input, output, session):
 
         daily = get_daily_assignments()
         year = input.year()
-        month = int(input.month())
-        
+        month = current_month.get()  # Use reactive value instead of input
+        api = api_assignments.get()
+        session = session_assignments.get()
+
+        # Table header
+        header_row = ui.div(
+            ui.div("Date", style="width: 120px; font-weight: bold;"),
+            ui.div("Color", style="width: 50px; font-weight: bold;"),
+            ui.div("Brand", style="width: 250px; font-weight: bold;"),
+            ui.div("Name", style="flex: 1; font-weight: bold;"),
+            ui.div("Actions", style="font-weight: bold;"),
+            style="display: flex; padding: 10px 15px; background: #e9ecef; border-bottom: 2px solid #dee2e6;"
+        )
+
         rows = []
         num_days = monthrange(year, month)[1]
-        
+
         for day in range(1, num_days + 1):
             date_str = f"{year}-{month:02d}-{day:02d}"
+            date_obj = datetime.strptime(date_str, "%Y-%m-%d")
             ink_idx = daily.get(date_str)
-            
+
+            # Date column
+            date_col = ui.div(
+                ui.strong(date_obj.strftime("%a, %b %d")),
+                style="width: 120px; color: #333;"
+            )
+
             if ink_idx is not None and ink_idx < len(inks):
                 ink = inks[ink_idx]
-                date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-                
+                color = ink.get("color", "#888888")
+                brand = ink.get("brand_name", "Unknown")
+                name = ink.get("name", "Unknown")
+
+                # Can edit if it's a session assignment (not from API)
+                can_edit = date_str in session and date_str not in api
+                is_api = date_str in api
+
+                # Ink swatch (small)
+                swatch = ink_swatch_svg(color, "sm")
+
+                # Brand and name columns
+                brand_col = ui.div(brand, style="width: 250px; overflow: hidden; text-overflow: ellipsis;")
+                name_col = ui.div(name, style="flex: 1; overflow: hidden; text-overflow: ellipsis;")
+
+                # Actions column
+                if can_edit:
+                    action_components = [
+                        ui.div(ui.input_date(f"date_{date_str.replace('-', '_')}", "", value=date_obj.date()), class_="calendar-icon-picker"),
+                        ui.input_action_button(
+                            f"remove_{date_str.replace('-', '_')}",
+                            "Remove",
+                            class_="btn-sm btn-outline-danger",
+                            style="margin-left: 10px; padding: 2px 8px;"
+                        )
+                    ]
+                    action_col = ui.div(*action_components, style="display: flex; align-items: center;")
+                elif is_api:
+                    action_col = ui.div(
+                        ui.span(date_obj.strftime("%b %d, %Y"), style="margin-right: 10px;"),
+                        ui.span("swatched", style="padding: 2px 6px; background: #e9ecef; border-radius: 4px; font-size: 0.75em; color: #666;"),
+                        style="display: flex; align-items: center;"
+                    )
+                else:
+                    action_col = ui.div()
+
                 row = ui.div(
-                    ui.div(
-                        ui.strong(date_obj.strftime("%A, %B %d, %Y")),
-                        style="font-size: 1.1em;"
-                    ),
-                    ui.div(
-                        f"{ink.get('brand_name', 'Unknown')} - {ink.get('name', 'Unknown')}",
-                        style="margin-left: 20px; color: #555;"
-                    ),
-                    style="padding: 15px; border-bottom: 1px solid #eee;"
+                    date_col,
+                    ui.div(swatch, style="width: 50px;"),
+                    brand_col,
+                    name_col,
+                    action_col,
+                    style="display: flex; align-items: center; padding: 8px 15px; border-bottom: 1px solid #eee;"
                 )
-                rows.append(row)
-        
-        return ui.div(*rows, style="max-height: 800px; overflow-y: auto;")
+            else:
+                # Unassigned day - with ink bottle icon to assign
+                ink_bottle_svg = ui.HTML('''<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10 2h4v2h-4z"/>
+                    <path d="M8 4h8l1 4H7l1-4z"/>
+                    <path d="M7 8h10v12a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V8z"/>
+                    <path d="M9 13h6v5H9z" fill="#666" opacity="0.3"/>
+                </svg>''')
+
+                assign_button = ui.input_action_button(
+                    f"assign_{date_str.replace('-', '_')}",
+                    ink_bottle_svg,
+                    class_="ink-assign-btn",
+                    title="Assign ink to this date"
+                )
+
+                row = ui.div(
+                    date_col,
+                    ui.div(style="width: 50px;"),
+                    ui.div(style="width: 250px;"),
+                    ui.div(
+                        ui.span("Unassigned", style="color: #999; font-style: italic;"),
+                        style="flex: 1; display: flex; align-items: center;"
+                    ),
+                    ui.div(assign_button, style="display: flex; align-items: center;"),
+                    style="display: flex; align-items: center; padding: 8px 15px; border-bottom: 1px solid #eee; background: #fafafa;"
+                )
+
+            rows.append(row)
+
+        list_content = ui.div(*rows, style="max-height: 600px; overflow-y: auto;")
+
+        return ui.div(header_row, list_content)
     
-    # Ink collection table
+    # Ink collection view with search and inline assignment
     @output
-    @render.data_frame
-    def ink_table():
+    @render.ui
+    def ink_collection_view():
         inks = ink_data.get()
         if not inks:
-            return pd.DataFrame()
-        
-        df = pd.DataFrame([
-            {
-                "Brand": ink.get("brand_name", ""),
-                "Name": ink.get("name", ""),
-                "Color": ink.get("color", ""),
-                "Type": ink.get("kind", "")
-            }
-            for ink in inks
-        ])
-        
-        return render.DataGrid(df, width="100%")
+            return ui.p("No inks loaded. Please fetch your collection first.")
+
+        daily = get_daily_assignments()
+        api = api_assignments.get()
+        # Explicit dependency to ensure re-render on session changes
+        _ = session_assignments.get()
+
+        # Build reverse lookup: ink_idx -> date_str
+        ink_to_date = {idx: date_str for date_str, idx in daily.items()}
+
+        # Get search filter
+        search_term = input.ink_search().lower().strip() if input.ink_search() else ""
+
+        # Table header
+        header_row = ui.div(
+            ui.div("Color", style="width: 50px; font-weight: bold;"),
+            ui.div("Brand", style="width: 250px; font-weight: bold;"),
+            ui.div("Name", style="flex: 1; font-weight: bold;"),
+            ui.div("Assignment", style="font-weight: bold;"),
+            style="display: flex; padding: 10px 15px; background: #e9ecef; border-bottom: 2px solid #dee2e6;"
+        )
+
+        rows = []
+        for idx, ink in enumerate(inks):
+            brand = ink.get("brand_name", "Unknown")
+            name = ink.get("name", "Unknown")
+            color = ink.get("color", "#888888")
+
+            # Apply search filter
+            if search_term and search_term not in brand.lower() and search_term not in name.lower():
+                continue
+
+            assigned_date = ink_to_date.get(idx)
+
+            # Ink swatch (small)
+            swatch = ink_swatch_svg(color, "sm")
+
+            # Brand and name columns
+            brand_col = ui.div(brand, style="width: 150px; overflow: hidden; text-overflow: ellipsis;")
+            name_col = ui.div(name, style="flex: 1; overflow: hidden; text-overflow: ellipsis;")
+
+            # Assignment column
+            is_api = assigned_date and assigned_date in api
+            is_session = assigned_date and not is_api
+
+            if is_api:
+                # API assignment - read only
+                date_obj = datetime.strptime(assigned_date, "%Y-%m-%d")
+                assign_col = ui.div(
+                    ui.span(date_obj.strftime("%b %d, %Y"), style="margin-right: 10px;"),
+                    ui.span("swatched", style="padding: 2px 6px; background: #e9ecef; border-radius: 4px; font-size: 0.75em; color: #666;"),
+                    style="display: flex; align-items: center;"
+                )
+            else:
+                # Editable - date picker for both session and unassigned
+                date_value = datetime.strptime(assigned_date, "%Y-%m-%d").date() if assigned_date else ""
+                components = []
+                if is_session:
+                    components.append(ui.input_action_button(
+                        f"ink_remove_{idx}",
+                        "Remove",
+                        class_="btn-sm btn-outline-danger",
+                        style="margin-right: 10px; padding: 2px 8px;"
+                    ))
+                components.append(ui.div(ui.input_date(f"ink_date_{idx}", "", value=date_value), style="width: 150px;"))
+                assign_col = ui.div(*components, style="display: flex; align-items: center;")
+
+            row = ui.div(
+                ui.div(swatch, style="width: 50px;"),
+                brand_col,
+                name_col,
+                assign_col,
+                style="display: flex; align-items: center; padding: 8px 15px; border-bottom: 1px solid #eee;"
+            )
+            rows.append(row)
+
+        count_text = f"Showing {len(rows)} of {len(inks)} inks" if search_term else f"{len(inks)} inks"
+        count_display = ui.div(count_text, style="color: #666; font-size: 0.9em; margin-bottom: 10px;")
+
+        list_content = ui.div(*rows, style="max-height: 600px; overflow-y: auto;")
+
+        return ui.div(count_display, header_row, list_content)
     
     # Month assignment table
     @output
     @render.data_frame
     def month_assignment():
         inks = ink_data.get()
-        assignments = get_yearly_assignments()
+        current_assignments = get_merged_assignments_dict()
         year = input.year()
 
-        if not inks or not assignments:
+        if not inks or not current_assignments:
             return pd.DataFrame()
 
         # Group assignments by month using tested function
         rows = []
         for month_num in range(1, 13):
             month_name = datetime(2000, month_num, 1).strftime("%B")
-            ink_indices = get_month_summary(assignments, year, month_num)
+            ink_indices = get_month_summary(current_assignments, year, month_num)
             ink_names = [
                 f"{inks[idx].get('brand_name', '')} - {inks[idx].get('name', '')}"
                 for idx in ink_indices if idx < len(inks)
@@ -410,29 +1077,56 @@ def server(input, output, session):
         df = pd.DataFrame(rows)
         return render.DataGrid(df, width="100%")
 
-    # Initialize chat with ink data
     def initialize_chat():
         """Initialize the LLM chat with ink collection context."""
         inks = ink_data.get()
         if not inks:
             return None
 
-        provider = input.llm_provider()
-
         try:
-            # Create chat instance
-            ink_summary = format_all_inks_for_llm(inks)
-            system_message = f"""You are an expert fountain pen ink curator helping organize {len(inks)} inks into monthly themes.
-
-{ink_summary}
-
-Help the user organize their inks by:
-- Suggesting monthly themes based on colors, seasons, and moods
-- Explaining your reasoning
-- Being flexible and iterative based on their feedback
-- Asking clarifying questions when needed"""
+            # Get provider from settings (with default fallback)
+            try:
+                provider = input.llm_provider()
+            except:
+                provider = "openai"  # Fallback to default if not set
             
+            # Create chat instance
+            year = selected_year.get()
+            system_message = f"""You are an expert fountain pen ink curator helping organize a collection of {len(inks)} inks for the year {year}.
+
+When analyzing an ink collection, consider:
+- Color families and harmonies
+- Ink brands, lines of inks
+- Seasonal appropriateness (e.g., warm colors in fall, pastels in spring, holidays)
+- Ink properties (shimmer, sheen, special effects)
+- User preferences and stated requirements
+- Variety and balance across the year
+
+You have access to tools that let you browse, search, assign, and remove ink assignments.
+
+When assigning inks to a month, it is important to fill up the entire month. Do not pick and choose some days here and there. If you have too many inks that fit a theme, you can ask for clarificatoin or pick a random subset. If there aren't enough to fill a month, suggest an additional theme or broaden the theme. 
+
+When suggesting themes, consider how many inks would fit into that theme and if that is enough to fill up a month.
+
+TWO-TIER STATE MANAGEMENT:
+- API Assignments: Loaded from the user's saved data. These are PROTECTED and cannot be modified.
+- Session Assignments: Your experimental assignments. These can be freely modified but are not auto-saved.
+
+PROTECTION RULES:
+- Dates with API assignments are protected - you cannot assign or unassign them
+- Session assignments can be freely added or removed
+- The user must explicitly save the session to persist your changes
+
+Help the user organize their inks by suggesting themes, using tools to make assignments, and being flexible based on feedback."""
+
             chat_obj = create_llm_chat(provider, system_prompt=system_message)
+
+            # Register tools with session/api assignment state
+            tool_functions = create_tool_functions(
+                ink_data, selected_year, session_assignments, api_assignments
+            )
+            for tool_func in tool_functions:
+                chat_obj.register_tool(tool_func)
 
             return chat_obj
 
@@ -459,9 +1153,7 @@ Help the user organize their inks by:
             llm_chat_instance.set(chat_obj)
             chat_initialized.set(True)
 
-            # Send welcome message
-            await chat.append_message("Hello! I've reviewed your ink collection and I'm ready to help you organize it into monthly themes. What are you thinking for your yearly ink schedule?")
-            return
+            # Don't return - continue to process the user's message below
 
         # Get response from LLM
         chat_obj = llm_chat_instance.get()
@@ -470,13 +1162,11 @@ Help the user organize their inks by:
             return
 
         try:
-            # Use stream() to avoid display issues - collect all chunks
-            chunks = []
-            for chunk in chat_obj.stream(user_input):
-                chunks.append(chunk)
-            
-            # Combine chunks into full response
-            response_text = "".join(str(chunk) for chunk in chunks)
+            # Use chat() which handles tool execution automatically
+            response = chat_obj.chat(user_input, echo="none")  # Use "none" in Shiny to avoid display issues
+
+            # Get the text content from the response
+            response_text = str(response)
             await chat.append_message(response_text)
 
         except Exception as e:

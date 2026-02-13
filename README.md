@@ -121,66 +121,96 @@ If two inks claim the same date, the first one processed gets it. The second ink
 
 ## AI-Powered Organization (Chat Interface)
 
-The app includes an interactive chat interface where you can have a conversation with an AI to organize your inks.
+The app includes an interactive chat interface where you can have a conversation with an AI to organize your inks. The AI can now **actively manage your ink assignments** using tools!
 
 ### Features
 
 - **Natural Conversation** - Chat back and forth with Claude or GPT-4
-- **Iterative Refinement** - Try different ideas, get suggestions, refine your approach
-- **Full Context** - The AI knows all your inks (colors, brands, descriptions, usage history)
+- **Active Assignment Management** - AI can search inks, view assignments, and assign inks to dates
+- **Protected Assignments** - Inks already assigned via comments are protected and won't be changed
+- **Tool-Based Actions** - AI uses functions to read and modify your ink calendar
 - **Visual History** - See the entire conversation thread
+
+### Available AI Tools
+
+The AI assistant has access to these tools:
+
+1. **list_all_inks()** - Browse your complete collection with assignment status
+2. **search_inks(query, color, brand)** - Find specific inks by name, color, or brand
+3. **get_month_assignments(month, year)** - View what's assigned to a specific month
+4. **assign_ink_to_date(ink_name, date, theme, theme_description)** - Assign an ink to a specific date
+5. **bulk_assign_month(ink_names, month, year, theme, theme_description)** - Assign multiple inks to a month at once
+6. **get_current_assignments_summary(year)** - Get overview of all assignments
 
 ### Setup
 
 1. Get an API key from either:
-   - **OpenAI (GPT-4)**: https://platform.openai.com/ (default, recommended)
-   - **Anthropic (Claude)**: https://console.anthropic.com/
+   - **Anthropic (Claude)**: https://console.anthropic.com/ (recommended, default)
+   - **OpenAI (GPT-4)**: https://platform.openai.com/
 
 2. Add to your `.env` file:
    ```bash
-   OPENAI_API_KEY=your_key_here
-   # OR
    ANTHROPIC_API_KEY=your_key_here
+   # OR
+   OPENAI_API_KEY=your_key_here
    ```
 
 3. Go to the "🤖 LLM Organizer" tab in the app
 
-4. Select your provider (OpenAI or Anthropic)
+4. Select your provider (Anthropic or OpenAI)
 
 5. Click "🆕 Start New Chat"
 
 6. Have a conversation! Examples:
    ```
-   "I want May to be all blues and greens for spring vibes"
-   "Can you suggest themes for each month based on seasons?"
-   "Show me which inks would work best for summer months"
-   "I want December to be festive - what do you suggest?"
+   "Show me all my blue inks"
+   "What's currently assigned to March?"
+   "Assign Diamine Blue Velvet to February 14th with theme 'Valentine's Day'"
+   "I want May to be all greens and blues - can you assign them for me?"
+   "Fill December with festive reds and greens"
    ```
 
 ### How It Works
 
 When you start a chat:
-1. The AI receives your complete ink collection with all metadata
-2. You can ask questions, make requests, and iterate on ideas
-3. The AI suggests organizations, explains its reasoning, and adapts based on your feedback
-4. The conversation history is preserved so you can refine your approach
+1. The AI receives information about your collection and the current year
+2. You can ask questions and make requests naturally
+3. The AI uses tools to search, view, and modify assignments
+4. Changes happen in real-time - the calendar updates immediately
+5. The conversation history is preserved for context
+
+### Protection Rules
+
+**IMPORTANT**: Inks that already have assignments in their `comment` field (via the manual JSON method) are **protected** and cannot be modified by the AI:
+
+- The AI will see these inks marked as `already_assigned: true`
+- Attempts to reassign them will be automatically rejected
+- They're skipped in bulk operations
+- Only you can manually change them via the FPC website
+
+This ensures the AI never overwrites your carefully planned assignments!
 
 ### Example Conversation
 
 ```
-You: I want to organize my inks by season. What do you suggest?
+You: What inks do I have available for February?
 
-AI: Great idea! Based on your collection, here's what I'm thinking:
-- Spring (Mar-May): Your lighter blues, greens, and pastels
-- Summer (Jun-Aug): Bright, vibrant colors like your yellows and coral pinks
-- Fall (Sep-Nov): Warm browns, oranges, and deep reds
-- Winter (Dec-Feb): Cool blues, purples, and your darker shades
+AI: [Uses search_inks() and get_month_assignments()]
+You have 45 inks not yet assigned. Would you like me to suggest some for February?
 
-Would you like me to break this down month by month?
+You: Yes, make it romantic blues and purples for Valentine's month.
 
-You: Yes, and make December extra festive!
+AI: [Uses assign_ink_to_date() multiple times]
+I've assigned:
+- Feb 1: Pilot Iroshizuku Kon-peki
+- Feb 14: Diamine Oxblood (romantic deep red)
+- Feb 28: Sailor Ink Studio 280 (purple)
+... and 25 more. Would you like me to continue or adjust any of these?
 
-AI: Perfect! For December, I'll use your reds, greens, and any inks with shimmer...
+You: Perfect! What about March?
+
+AI: [Uses get_month_assignments(3)]
+March currently has 12 days assigned. Would you like me to fill in the rest with spring greens?
 ```
 
 ## Testing

@@ -23,8 +23,8 @@ def format_ink_for_llm(ink: Dict, idx: int) -> str:
         tags = ', '.join(ink.get('cluster_tags', []))
         parts.append(f"  Color Tags: {tags}")
 
-    if ink.get('public_comment'):
-        parts.append(f"  Description: {ink.get('public_comment')}")
+    if ink.get('comment'):
+        parts.append(f"  Description: {ink.get('comment')}")
 
     if ink.get('kind'):
         parts.append(f"  Type: {ink.get('kind')}")
@@ -229,30 +229,3 @@ def validate_monthly_assignments(assignments: Dict, num_inks: int) -> List[str]:
         errors.append(f"Invalid ink indices: {sorted(extra_inks)}")
 
     return errors
-
-
-def get_llm_monthly_assignments(inks: List[Dict], user_preferences: Optional[str] = None, provider: str = "anthropic") -> Dict:
-    """
-    Get LLM-suggested monthly ink assignments.
-
-    Args:
-        inks: List of ink dictionaries
-        user_preferences: Optional user preferences
-        provider: LLM provider to use
-
-    Returns:
-        Dictionary with monthly_themes and reasoning, validated
-
-    Raises:
-        ValueError: If LLM response is invalid
-    """
-    llm_response = ask_llm_for_monthly_themes(inks, user_preferences, provider)
-    assignments = parse_llm_monthly_assignments(llm_response)
-
-    # Validate
-    errors = validate_monthly_assignments(assignments, len(inks))
-    if errors:
-        error_msg = "\n".join(errors)
-        raise ValueError(f"LLM assignments are invalid:\n{error_msg}")
-
-    return assignments

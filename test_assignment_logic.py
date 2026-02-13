@@ -2,105 +2,50 @@
 Tests for ink assignment logic
 """
 import pytest
-from datetime import datetime
 from assignment_logic import (
-    create_yearly_assignments,
-    create_yearly_assignments_with_inks,
     parse_swatch_date_from_comment,
     get_month_summary,
-    validate_assignments_unique
+    parse_comment_json,
+    has_assignment,
+    find_ink_by_name,
+    search_inks,
 )
-
-
-def test_create_yearly_assignments_basic():
-    """Test basic yearly assignment creation"""
-    # Test with 100 inks for year 2025
-    assignments = create_yearly_assignments(100, 2025, seed=42)
-
-    # Should have 100 assignments (one per ink)
-    assert len(assignments) == 100
-
-    # All should be in 2025
-    for date_str in assignments.keys():
-        date = datetime.strptime(date_str, "%Y-%m-%d")
-        assert date.year == 2025
-
-    # All inks should be unique
-    assert validate_assignments_unique(assignments)
-
-
-def test_create_yearly_assignments_empty():
-    """Test with no inks"""
-    assignments = create_yearly_assignments(0, 2025)
-    assert assignments == {}
-
-
-def test_create_yearly_assignments_more_than_days():
-    """Test with more inks than days in year"""
-    # 365 days in 2025, but 400 inks
-    assignments = create_yearly_assignments(400, 2025, seed=42)
-
-    # Should only assign 365 inks (one per day)
-    assert len(assignments) == 365
-
-    # All inks should be unique
-    assert validate_assignments_unique(assignments)
-
-
-def test_create_yearly_assignments_fewer_than_days():
-    """Test with fewer inks than days in year"""
-    # Only 100 inks but 365 days
-    assignments = create_yearly_assignments(100, 2025, seed=42)
-
-    # Should assign all 100 inks
-    assert len(assignments) == 100
-
-    # All inks should be unique
-    assert validate_assignments_unique(assignments)
-
-
-def test_create_yearly_assignments_reproducible():
-    """Test that same seed produces same assignments"""
-    assignments1 = create_yearly_assignments(50, 2025, seed=123)
-    assignments2 = create_yearly_assignments(50, 2025, seed=123)
-
-    assert assignments1 == assignments2
-
-
-def test_create_yearly_assignments_different_with_different_seed():
-    """Test that different seeds produce different assignments"""
-    assignments1 = create_yearly_assignments(50, 2025, seed=123)
-    assignments2 = create_yearly_assignments(50, 2025, seed=456)
-
-    # Should be different (extremely unlikely to be the same)
-    assert assignments1 != assignments2
 
 
 def test_get_month_summary():
     """Test extracting inks for a specific month"""
-    # Create assignments for 365 inks in 2025
-    assignments = create_yearly_assignments(365, 2025, seed=42)
+    # Manually create assignments for January 2025
+    assignments = {
+        "2025-01-01": 0,
+        "2025-01-15": 1,
+        "2025-01-31": 2,
+        "2025-02-01": 3,  # Different month
+    }
 
     # Get January inks
     january_inks = get_month_summary(assignments, 2025, 1)
 
-    # January has 31 days, so should have 31 inks
-    assert len(january_inks) == 31
-
-    # All should be valid ink indices
-    for ink_idx in january_inks:
-        assert 0 <= ink_idx < 365
+    # Should have 3 January assignments
+    assert len(january_inks) == 3
+    assert set(january_inks) == {0, 1, 2}
 
 
 def test_get_month_summary_february():
-    """Test February which has fewer days"""
-    assignments = create_yearly_assignments(365, 2025, seed=42)
+    """Test February summary"""
+    assignments = {
+        "2025-01-31": 0,
+        "2025-02-01": 1,
+        "2025-02-14": 2,
+        "2025-02-28": 3,
+        "2025-03-01": 4,
+    }
 
-    # Get February inks (28 days in 2025)
+    # Get February inks
     february_inks = get_month_summary(assignments, 2025, 2)
 
-    # Should have 28 inks
-    assert len(february_inks) == 28
+    # Should have 3 February assignments
+    assert len(february_inks) == 3
+    assert set(february_inks) == {1, 2, 3}
 
 
 def test_get_month_summary_empty():
@@ -111,58 +56,20 @@ def test_get_month_summary_empty():
     assert january_inks == []
 
 
-def test_validate_assignments_unique_valid():
-    """Test validation with unique assignments"""
+def test_get_month_summary_wrong_year():
+    """Test month summary filters by year correctly"""
     assignments = {
-        "2025-01-01": 0,
-        "2025-01-02": 1,
-        "2025-01-03": 2,
+        "2024-01-15": 0,  # Wrong year
+        "2025-01-15": 1,  # Right year
     }
 
-    assert validate_assignments_unique(assignments) is True
+    january_inks = get_month_summary(assignments, 2025, 1)
+
+    assert len(january_inks) == 1
+    assert january_inks[0] == 1
 
 
-def test_validate_assignments_unique_duplicate():
-    """Test validation with duplicate ink"""
-    assignments = {
-        "2025-01-01": 0,
-        "2025-01-02": 1,
-        "2025-01-03": 0,  # Duplicate!
-    }
-
-    assert validate_assignments_unique(assignments) is False
-
-
-def test_validate_assignments_unique_empty():
-    """Test validation with empty assignments"""
-    assignments = {}
-
-    assert validate_assignments_unique(assignments) is True
-
-
-def test_year_coverage():
-    """Test that assignments cover the whole year when enough inks"""
-    assignments = create_yearly_assignments(365, 2025, seed=42)
-
-    # Extract all months
-    months_with_inks = set()
-    for date_str in assignments.keys():
-        date = datetime.strptime(date_str, "%Y-%m-%d")
-        months_with_inks.add(date.month)
-
-    # Should have inks in all 12 months
-    assert months_with_inks == set(range(1, 13))
-
-
-def test_parse_swatch_date_from_comment_valid_old_format():
-    """Test parsing valid swatch date from comment (old format)"""
-    comment = '{"swatch2026": "2026-01-15"}'
-    date_str = parse_swatch_date_from_comment(comment, 2026)
-
-    assert date_str == "2026-01-15"
-
-
-def test_parse_swatch_date_from_comment_valid_new_format():
+def test_parse_swatch_date_from_comment_valid():
     """Test parsing valid swatch date from comment (new format with theme)"""
     comment = '{"swatch2026": {"theme": "All samples", "theme_description": "New inks for a new year", "date": "2026-01-15"}}'
     date_str = parse_swatch_date_from_comment(comment, 2026)
@@ -217,87 +124,124 @@ def test_parse_swatch_date_from_comment_new_format_invalid_date():
     assert date_str is None
 
 
-def test_create_yearly_assignments_with_inks_explicit_dates():
-    """Test that explicit dates in comments are respected (new format)"""
+# =============================================================================
+# Tests for new pure helper functions
+# =============================================================================
+
+def test_parse_comment_json_valid():
+    """Test parsing valid JSON comment"""
+    result = parse_comment_json('{"key": "value"}')
+    assert result == {"key": "value"}
+
+
+def test_parse_comment_json_empty():
+    """Test parsing empty/None comment"""
+    assert parse_comment_json("") == {}
+    assert parse_comment_json(None) == {}
+
+
+def test_parse_comment_json_invalid():
+    """Test parsing invalid JSON"""
+    assert parse_comment_json("not json") == {}
+
+
+def test_has_assignment_true():
+    """Test has_assignment returns True when date exists"""
+    ink = {"private_comment": '{"swatch2025": {"date": "2025-01-15"}}'}
+    assert has_assignment(ink, 2025) is True
+
+
+def test_has_assignment_false_no_comment():
+    """Test has_assignment returns False when no comment"""
+    ink = {"private_comment": ""}
+    assert has_assignment(ink, 2025) is False
+
+
+def test_has_assignment_false_wrong_year():
+    """Test has_assignment returns False for wrong year"""
+    ink = {"private_comment": '{"swatch2024": {"date": "2024-01-15"}}'}
+    assert has_assignment(ink, 2025) is False
+
+
+def test_has_assignment_false_no_date():
+    """Test has_assignment returns False when no date field"""
+    ink = {"private_comment": '{"swatch2025": {"theme": "Test"}}'}
+    assert has_assignment(ink, 2025) is False
+
+
+def test_find_ink_by_name_exact_match():
+    """Test finding ink by exact name match"""
     inks = [
-        {"name": "Ink 1", "comment": '{"swatch2025": {"theme": "New Year", "date": "2025-01-01"}}'},
-        {"name": "Ink 2", "comment": '{"swatch2025": {"theme": "Year End", "date": "2025-12-31"}}'},
-        {"name": "Ink 3", "comment": ""},
+        {"brand_name": "Diamine", "name": "Blue Velvet"},
+        {"brand_name": "Pilot", "name": "Blue"},
     ]
-
-    assignments = create_yearly_assignments_with_inks(inks, 2025, seed=42)
-
-    # Ink 0 should be assigned to Jan 1
-    assert assignments.get("2025-01-01") == 0
-
-    # Ink 1 should be assigned to Dec 31
-    assert assignments.get("2025-12-31") == 1
-
-    # Ink 2 should be randomly assigned somewhere
-    assert 2 in assignments.values()
-
-    # All assignments should be unique
-    assert validate_assignments_unique(assignments)
+    result = find_ink_by_name("Blue Velvet", inks)
+    assert result is not None
+    assert result[0] == 0
 
 
-def test_create_yearly_assignments_with_inks_no_explicit_dates():
-    """Test that without explicit dates, behavior is like random assignment"""
+def test_find_ink_by_name_full_name():
+    """Test finding ink by brand + name"""
     inks = [
-        {"name": "Ink 1", "comment": ""},
-        {"name": "Ink 2", "comment": ""},
-        {"name": "Ink 3", "comment": ""},
+        {"brand_name": "Diamine", "name": "Blue Velvet"},
+        {"brand_name": "Pilot", "name": "Blue"},
     ]
-
-    assignments = create_yearly_assignments_with_inks(inks, 2025, seed=42)
-
-    # Should have 3 assignments
-    assert len(assignments) == 3
-
-    # All should be unique
-    assert validate_assignments_unique(assignments)
+    result = find_ink_by_name("diamine blue velvet", inks)
+    assert result is not None
+    assert result[0] == 0
 
 
-def test_create_yearly_assignments_with_inks_duplicate_date():
-    """Test that if two inks claim same date, only first gets it"""
+def test_find_ink_by_name_substring():
+    """Test finding ink by substring"""
     inks = [
-        {"name": "Ink 1", "comment": '{"swatch2025": {"date": "2025-06-15"}}'},
-        {"name": "Ink 2", "comment": '{"swatch2025": {"date": "2025-06-15"}}'},  # Duplicate!
-        {"name": "Ink 3", "comment": ""},
+        {"brand_name": "Diamine", "name": "Blue Velvet"},
+        {"brand_name": "Pilot", "name": "Iroshizuku Kon-peki"},
     ]
-
-    assignments = create_yearly_assignments_with_inks(inks, 2025, seed=42)
-
-    # Only ink 0 should get June 15
-    assert assignments.get("2025-06-15") == 0
-
-    # Ink 1 should be assigned somewhere else
-    assert 1 in assignments.values()
-    # But not to June 15
-    assert assignments.get("2025-06-15") != 1
-
-    # All assignments should be unique
-    assert validate_assignments_unique(assignments)
+    result = find_ink_by_name("velvet", inks)
+    assert result is not None
+    assert result[0] == 0
 
 
-def test_create_yearly_assignments_with_inks_old_format_backward_compat():
-    """Test backward compatibility with old format"""
+def test_find_ink_by_name_not_found():
+    """Test finding ink that doesn't exist"""
     inks = [
-        {"name": "Ink 1", "comment": '{"swatch2025": "2025-01-01"}'},  # Old format
-        {"name": "Ink 2", "comment": ""},
+        {"brand_name": "Diamine", "name": "Blue Velvet"},
     ]
-
-    assignments = create_yearly_assignments_with_inks(inks, 2025, seed=42)
-
-    # Old format should still work
-    assert assignments.get("2025-01-01") == 0
-    assert validate_assignments_unique(assignments)
+    result = find_ink_by_name("Red Dragon", inks)
+    assert result is None
 
 
-def test_create_yearly_assignments_with_inks_empty_list():
-    """Test with empty ink list"""
-    assignments = create_yearly_assignments_with_inks([], 2025)
+def test_search_inks_by_query():
+    """Test searching inks by name query"""
+    inks = [
+        {"brand_name": "Diamine", "name": "Blue Velvet", "cluster_tags": ["blue"]},
+        {"brand_name": "Pilot", "name": "Red Dragon", "cluster_tags": ["red"]},
+    ]
+    results = search_inks(inks, 2025, query="blue")
+    assert len(results) == 1
+    assert results[0]["name"] == "Blue Velvet"
 
-    assert assignments == {}
+
+def test_search_inks_by_color():
+    """Test searching inks by color tag"""
+    inks = [
+        {"brand_name": "Diamine", "name": "Blue Velvet", "cluster_tags": ["blue"], "private_comment": ""},
+        {"brand_name": "Pilot", "name": "Red Dragon", "cluster_tags": ["red"], "private_comment": ""},
+    ]
+    results = search_inks(inks, 2025, color="red")
+    assert len(results) == 1
+    assert results[0]["name"] == "Red Dragon"
+
+
+def test_search_inks_by_brand():
+    """Test searching inks by brand"""
+    inks = [
+        {"brand_name": "Diamine", "name": "Blue Velvet", "cluster_tags": [], "private_comment": ""},
+        {"brand_name": "Pilot", "name": "Blue", "cluster_tags": [], "private_comment": ""},
+    ]
+    results = search_inks(inks, 2025, brand="pilot")
+    assert len(results) == 1
+    assert results[0]["brand"] == "Pilot"
 
 
 if __name__ == "__main__":

@@ -39,8 +39,7 @@ def load_inks_from_cache() -> Optional[Dict]:
 
     try:
         with open(CACHE_FILE, "r") as f:
-            cache_data = json.load(f)
-            return cache_data
+            return json.load(f)
     except (json.JSONDecodeError, IOError):
         return None
 
@@ -80,3 +79,42 @@ def clear_cache() -> bool:
         os.remove(CACHE_FILE)
         return True
     return False
+
+
+def save_session_state(assignments: Dict[str, int], filepath: str) -> bool:
+    """
+    Save session assignments to a file.
+
+    Args:
+        assignments: Dictionary mapping date strings to ink indices
+        filepath: Path to save the session file
+
+    Returns:
+        True if saved successfully, False otherwise
+    """
+    try:
+        with open(filepath, "w") as f:
+            json.dump(assignments, f, indent=2)
+        return True
+    except (IOError, OSError):
+        return False
+
+
+def load_session_state(filepath: str) -> Optional[Dict[str, int]]:
+    """
+    Load session assignments from a file.
+
+    Args:
+        filepath: Path to the session file
+
+    Returns:
+        Dictionary mapping date strings to ink indices, or None if loading fails
+    """
+    if not os.path.exists(filepath):
+        return None
+
+    try:
+        with open(filepath, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return None

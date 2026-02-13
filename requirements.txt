@@ -1,0 +1,6 @@
+chatlas>=0.15.1
+python_dotenv
+pandas
+pytest
+requests
+shiny

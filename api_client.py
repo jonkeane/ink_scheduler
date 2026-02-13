@@ -59,8 +59,8 @@ def fetch_all_collected_inks(api_token: str, base_url: str = "https://www.founta
                 "usage_count": attrs.get("usage", 0),
                 "daily_usage": attrs.get("daily_usage", 0),
                 "last_used_on": attrs.get("last_used_on", ""),
-                "comment": attrs.get("private_comment", ""),  # Use private_comment for swatch assignments
-                "public_comment": attrs.get("comment", ""),
+                "comment": attrs.get("comment", ""),  # Public comment from API
+                "private_comment": attrs.get("private_comment", ""),  # Private comment (where assignments go)
                 "simplified_brand_name": attrs.get("simplified_brand_name", ""),
                 "simplified_ink_name": attrs.get("simplified_ink_name", ""),
             }
@@ -106,5 +106,6 @@ def flatten_ink_data(raw_ink: Dict) -> Dict:
         "archived": attrs.get("archived", False),
         "private": attrs.get("private", False),
         "usage_count": attrs.get("usage_count", 0),
-        "comment": attrs.get("private_comment", ""),  # Use private_comment for swatch assignments
+        "comment": attrs.get("comment", ""),  # Public comment from API
+        "private_comment": attrs.get("private_comment", ""),  # Private comment (where assignments go)
     }
