@@ -3,6 +3,15 @@ from datetime import datetime
 import pandas as pd
 from calendar import monthrange
 import os
+import logging
+
+# Configure chatlas logging before importing chatlas-related modules
+os.environ["CHATLAS_LOG"] = "debug"
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+
 from dotenv import load_dotenv
 from assignment_logic import (
     create_explicit_assignments_only,
@@ -163,6 +172,7 @@ def server(input, output, session):
     ink_data = reactive.Value([])
     api_assignments = reactive.Value({})  # Assignments from API cache (protected, read-only)
     session_assignments = reactive.Value({})  # Experimental assignments (editable, not auto-persisted)
+    session_themes = reactive.Value({})  # Month themes {month_key: {theme, description}}
     llm_chat_instance = reactive.Value(None)  # Store LLM chat instance
     chat_initialized = reactive.Value(False)  # Track if chat has been initialized
     selected_year = reactive.Value(datetime.now().year)  # Track selected year for LLM tools
@@ -187,8 +197,19 @@ def server(input, output, session):
             try:
                 with open(default_session_path, "r") as f:
                     loaded = json.load(f)
-                session_assignments.set(loaded)
-                ui.notification_show(f"Loaded default session ({len(loaded)} assignments)", type="message", duration=3)
+                # Support both old format (flat dict) and new format (with assignments/themes)
+                if "assignments" in loaded:
+                    # New format
+                    session_assignments.set(loaded.get("assignments", {}))
+                    session_themes.set(loaded.get("themes", {}))
+                    num_assignments = len(loaded.get("assignments", {}))
+                    num_themes = len(loaded.get("themes", {}))
+                    ui.notification_show(f"Loaded default session ({num_assignments} assignments, {num_themes} themes)", type="message", duration=3)
+                else:
+                    # Old format - flat dict of assignments
+                    session_assignments.set(loaded)
+                    session_themes.set({})
+                    ui.notification_show(f"Loaded default session ({len(loaded)} assignments)", type="message", duration=3)
             except Exception as e:
                 ui.notification_show(f"Error loading default session: {str(e)}", type="warning")
 
@@ -224,9 +245,10 @@ def server(input, output, session):
         # Update API assignments
         api_assignments.set(explicit)
 
-        # Clear session assignments only on subsequent year changes (not initial load)
+        # Clear session assignments and themes only on subsequent year changes (not initial load)
         if initial_year_set.get():
             session_assignments.set({})
+            session_themes.set({})
         else:
             initial_year_set.set(True)
 
@@ -252,19 +274,33 @@ def server(input, output, session):
     def session_status():
         session = session_assignments.get()
         api = api_assignments.get()
-        if not session and not api:
+        themes = session_themes.get()
+        if not session and not api and not themes:
             return "No assignments"
-        return f"{len(api)} API + {len(session)} session"
+        parts = []
+        if api:
+            parts.append(f"{len(api)} API")
+        if session:
+            parts.append(f"{len(session)} session")
+        if themes:
+            parts.append(f"{len(themes)} themes")
+        return " + ".join(parts) if parts else "No assignments"
 
     # Save session as downloadable file
     @render.download(filename=lambda: f"session_{input.year()}.json")
     def save_session():
         import json
-        session = session_assignments.get()
-        if not session:
-            ui.notification_show("No session assignments to save", type="warning")
+        assignments = session_assignments.get()
+        themes = session_themes.get()
+        if not assignments and not themes:
+            ui.notification_show("No session data to save", type="warning")
             return
-        yield json.dumps(session, indent=2)
+        # Save in new format with both assignments and themes
+        session_data = {
+            "assignments": assignments,
+            "themes": themes
+        }
+        yield json.dumps(session_data, indent=2)
 
     # Load session from uploaded file
     @reactive.Effect
@@ -279,8 +315,19 @@ def server(input, output, session):
             file_path = file_info[0]["datapath"]
             with open(file_path, "r") as f:
                 loaded = json.load(f)
-            session_assignments.set(loaded)
-            ui.notification_show(f"Loaded {len(loaded)} assignments", type="message")
+            # Support both old format (flat dict) and new format (with assignments/themes)
+            if "assignments" in loaded:
+                # New format
+                session_assignments.set(loaded.get("assignments", {}))
+                session_themes.set(loaded.get("themes", {}))
+                num_assignments = len(loaded.get("assignments", {}))
+                num_themes = len(loaded.get("themes", {}))
+                ui.notification_show(f"Loaded {num_assignments} assignments, {num_themes} themes", type="message")
+            else:
+                # Old format - flat dict of assignments
+                session_assignments.set(loaded)
+                session_themes.set({})
+                ui.notification_show(f"Loaded {len(loaded)} assignments", type="message")
         except Exception as e:
             ui.notification_show(f"Error loading file: {str(e)}", type="error")
 
@@ -304,14 +351,30 @@ def server(input, output, session):
     @output
     @render.ui
     def theme_label():
+        year = input.year()
+        month = current_month.get()
+        month_key = f"{year}-{month:02d}"
+
+        # Check session themes first
+        themes = session_themes.get()
+        if month_key in themes:
+            theme_data = themes[month_key]
+            theme_name = theme_data.get("theme", "")
+            theme_desc = theme_data.get("description", "")
+            if theme_name:
+                return ui.span(
+                    ui.strong(theme_name, class_="theme-name"),
+                    ui.span(" — ", class_="theme-separator") if theme_desc else "",
+                    ui.span(theme_desc, class_="theme-description") if theme_desc else "",
+                    class_="theme-container"
+                )
+
+        # Fall back to checking API ink comments
         inks = ink_data.get()
         if not inks:
             return ui.span()
 
-        year = input.year()
-        month = current_month.get()
         daily = get_daily_assignments()
-
         first_day_str = f"{year}-{month:02d}-01"
         first_day_ink_idx = daily.get(first_day_str)
 
@@ -1120,10 +1183,22 @@ When analyzing an ink collection, consider:
 - Variety and balance across the year
 
 You have access to tools that let you browse, search, assign, and remove ink assignments.
+You can also set themes for months using set_month_theme() - always set a theme after filling a month with inks!
 
-When assigning inks to a month, it is important to fill up the entire month. Do not pick and choose some days here and there. If you have too many inks that fit a theme, you can ask for clarificatoin or pick a random subset. If there aren't enough to fill a month, suggest an additional theme or broaden the theme. 
+HOLISTIC THEME PLANNING (CRITICAL):
+Before proposing any theme, you MUST evaluate whether it can fill the entire month:
+1. First, search for inks that would match the theme using search_inks() or find_available_inks_for_theme()
+2. Count how many matching inks are available vs. how many days need filling
+3. A month typically has 28-31 days. A theme with only 4-5 matching inks is NOT viable on its own.
 
-When suggesting themes, consider how many inks would fit into that theme and if that is enough to fill up a month.
+If a theme cannot fill the month:
+- DO NOT propose it as a standalone theme
+- Instead, propose a COMBINED theme (e.g., "Blues & Teals" or "Shimmer & Sheen Inks" or "Winter Cool Tones")
+- Or broaden the criteria (e.g., instead of "Navy Blue" suggest "Blue Family")
+- Or suggest two complementary themes that together fill the month (e.g., "Week 1-2: Warm Reds, Week 3-4: Deep Burgundies")
+- You also cannot repeat an ink throughout the year. In fact, the tool calls are set up to make that impossible. If you don't have enough inks for a month, you will need to try harder.
+
+NEVER leave a month partially filled. Every day should have an ink assigned. If the user requests a narrow theme that can't fill the month, explain the coverage gap and propose alternatives that achieve full coverage.
 
 TWO-TIER STATE MANAGEMENT:
 - API Assignments: Loaded from the user's saved data. These are PROTECTED and cannot be modified.
@@ -1134,18 +1209,29 @@ PROTECTION RULES:
 - Session assignments can be freely added or removed
 - The user must explicitly save the session to persist your changes
 
+PROACTIVE GAP FILLING:
+When you move or reassign inks from one month to another, this often creates gaps (empty slots) in the source month. Be proactive about filling these:
+1. After moving inks out of a month, check if it now has unassigned days using get_month_assignments()
+2. If there are gaps, use find_available_inks_for_theme() to find inks that could fill them
+3. This tool returns both unassigned inks AND session-assigned inks that could be reshuffled
+4. Suggest backfilling with inks that match the month's existing theme, or propose adjusting the theme
+5. Don't wait for the user to notice empty slots - anticipate and offer to fill them
+6. It may take a few rounds of shuffling to optimize the schedule, and that's fine
+7. Consider whether moving a session-assigned ink from another month would create a better overall arrangement
+
+
 Help the user organize their inks by suggesting themes, using tools to make assignments, and being flexible based on feedback."""
 
             chat_obj = create_llm_chat(provider, system_prompt=system_message)
 
             # Register tools with session/api assignment state
-            tool_functions = create_tool_functions(
-                ink_data, selected_year, session_assignments, api_assignments
+            tool_functions, snapshot_updater = create_tool_functions(
+                ink_data, selected_year, session_assignments, api_assignments, session_themes
             )
             for tool_func in tool_functions:
                 chat_obj.register_tool(tool_func)
 
-            return chat_obj
+            return chat_obj, snapshot_updater
 
         except Exception as e:
             print(f"Chat initialization error: {traceback.format_exc()}")
@@ -1162,29 +1248,31 @@ Help the user organize their inks by suggesting themes, using tools to make assi
                 await chat.append_message("❌ Please fetch your inks first using the sidebar.")
                 return
 
-            chat_obj = initialize_chat()
-            if not chat_obj:
+            result = initialize_chat()
+            if not result:
                 await chat.append_message("❌ Error initializing chat. Please check your API key in the .env file.")
                 return
 
-            llm_chat_instance.set(chat_obj)
+            chat_obj, snapshot_updater = result
+            llm_chat_instance.set((chat_obj, snapshot_updater))
             chat_initialized.set(True)
 
             # Don't return - continue to process the user's message below
 
         # Get response from LLM
-        chat_obj = llm_chat_instance.get()
-        if not chat_obj:
+        stored = llm_chat_instance.get()
+        if not stored:
             await chat.append_message("❌ Chat not initialized. Please reset and try again.")
             return
 
-        try:
-            # Use chat() which handles tool execution automatically
-            response = chat_obj.chat(user_input, echo="none")  # Use "none" in Shiny to avoid display issues
+        chat_obj, snapshot_updater = stored
 
-            # Get the text content from the response
-            response_text = str(response)
-            await chat.append_message(response_text)
+        try:
+            # Update snapshot from reactive values before async call
+            snapshot_updater()
+            # Use stream_async with content="all" to show tool calls in the chat UI
+            response = await chat_obj.stream_async(user_input, content="all")
+            await chat.append_message_stream(response)
 
         except Exception as e:
             error_msg = f"❌ Error: {str(e)}"

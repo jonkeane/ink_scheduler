@@ -8,6 +8,15 @@ These are thin wrappers around assignment_logic.py functions that:
 
 Session assignments are experimental and not auto-persisted.
 API assignments (from ink_cache) are protected and read-only.
+
+Session format:
+{
+    "assignments": { "2026-02-01": 18, ... },
+    "themes": {
+        "2026-02": { "theme": "Blues", "description": "Cool winter tones" },
+        ...
+    }
+}
 """
 from typing import List, Dict, Optional, Any
 import calendar
@@ -20,7 +29,8 @@ from assignment_logic import (
 
 
 def create_tool_functions(ink_data_reactive, selected_year_reactive,
-                          session_assignments_reactive, api_assignments_reactive):
+                          session_assignments_reactive, api_assignments_reactive,
+                          session_themes_reactive=None):
     """
     Create tool functions bound to reactive state.
 
@@ -29,16 +39,33 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
         selected_year_reactive: Reactive value containing selected year
         session_assignments_reactive: Reactive value for session assignments {date: ink_idx}
         api_assignments_reactive: Reactive value for API assignments {date: ink_idx} (read-only)
+        session_themes_reactive: Reactive value for session themes {month_key: {theme, description}}
 
     Returns:
-        List of tool functions ready to register with chatlas
+        Tuple of (tool_functions_list, snapshot_updater_function)
+        Call the snapshot_updater before each stream_async() call.
     """
+    # Snapshot storage for async-safe access
+    _snapshot = {
+        "inks": [],
+        "year": 2026,
+        "session": {},
+        "api": {},
+        "themes": {}
+    }
+
+    def update_snapshot():
+        """Update snapshot from reactive values. Call before stream_async()."""
+        _snapshot["inks"] = ink_data_reactive.get()
+        _snapshot["year"] = selected_year_reactive.get()
+        _snapshot["session"] = session_assignments_reactive.get().copy()
+        _snapshot["api"] = api_assignments_reactive.get().copy()
+        if session_themes_reactive is not None:
+            _snapshot["themes"] = session_themes_reactive.get().copy()
 
     def _get_merged_assignments():
         """Get merged view of API + session assignments. API takes precedence."""
-        api = api_assignments_reactive.get()
-        session = session_assignments_reactive.get()
-        return {**session, **api}
+        return {**_snapshot["session"], **_snapshot["api"]}
 
     def list_all_inks() -> Dict[str, Any]:
         """
@@ -47,7 +74,7 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
         Returns a summary of all available inks including brand, name, color tags,
         and whether they're already assigned for the current year.
         """
-        inks = ink_data_reactive.get()
+        inks = _snapshot["inks"]
 
         if not inks:
             return {"success": False, "message": "No inks available in collection"}
@@ -79,8 +106,8 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
 
         Returns matches with their index numbers and current assignment status.
         """
-        inks = ink_data_reactive.get()
-        year = selected_year_reactive.get()
+        inks = _snapshot["inks"]
+        year = _snapshot["year"]
 
         if not inks:
             return {"success": False, "message": "No inks available in collection"}
@@ -108,17 +135,17 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
         Returns information about which inks are assigned to which dates in that month.
         """
         if year is None:
-            year = selected_year_reactive.get()
+            year = _snapshot["year"]
 
         if not 1 <= month <= 12:
             return {"success": False, "message": f"Invalid month: {month}. Must be 1-12."}
 
-        inks = ink_data_reactive.get()
+        inks = _snapshot["inks"]
         if not inks:
             return {"success": False, "message": "No inks available in collection"}
 
         merged = _get_merged_assignments()
-        api = api_assignments_reactive.get()
+        api = _snapshot["api"]
         days_in_month = calendar.monthrange(year, month)[1]
 
         # Filter to this month
@@ -164,7 +191,7 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
         Returns success status and details. Will NOT modify dates that already have
         API assignments (protected).
         """
-        inks = ink_data_reactive.get()
+        inks = _snapshot["inks"]
 
         if not inks:
             return {"success": False, "message": "No inks available in collection"}
@@ -177,8 +204,8 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
         idx, ink = result
 
         # Use unified move function (assign = move with from_date=None)
-        session = session_assignments_reactive.get()
-        api = api_assignments_reactive.get()
+        session = _snapshot["session"]
+        api = _snapshot["api"]
 
         new_session, move_result = move_ink_assignment(
             session=session,
@@ -192,8 +219,9 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
         if not move_result.success:
             return move_result.to_dict()
 
-        # Update reactive state
+        # Update reactive state and snapshot
         session_assignments_reactive.set(new_session)
+        _snapshot["session"] = new_session.copy()
 
         return {
             "success": True,
@@ -220,12 +248,12 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
         dates that have API assignments (protected).
         """
         if year is None:
-            year = selected_year_reactive.get()
+            year = _snapshot["year"]
 
         if not 1 <= month <= 12:
             return {"success": False, "message": f"Invalid month: {month}. Must be 1-12."}
 
-        inks = ink_data_reactive.get()
+        inks = _snapshot["inks"]
         if not inks:
             return {"success": False, "message": "No inks available in collection"}
 
@@ -249,7 +277,7 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
             }
 
         successful, failed, already_assigned = [], [], []
-        session = session_assignments_reactive.get().copy()
+        session = _snapshot["session"].copy()
         assigned_indices = set(merged.values())
 
         for i, ink_id in enumerate(ink_identifiers):
@@ -288,6 +316,7 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
 
         if successful:
             session_assignments_reactive.set(session)
+            _snapshot["session"] = session.copy()
 
         return {
             "success": len(successful) > 0,
@@ -315,18 +344,19 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
         """
         # Use unified move function - it handles all validation and derives ink_idx
         new_session, move_result = move_ink_assignment(
-            session=session_assignments_reactive.get(),
-            api=api_assignments_reactive.get(),
+            session=_snapshot["session"],
+            api=_snapshot["api"],
             from_date=date_str,
             to_date=None,
-            inks=ink_data_reactive.get()
+            inks=_snapshot["inks"]
         )
 
         if not move_result.success:
             return move_result.to_dict()
 
-        # Update reactive state
+        # Update reactive state and snapshot
         session_assignments_reactive.set(new_session)
+        _snapshot["session"] = new_session.copy()
 
         return {
             "success": True,
@@ -347,14 +377,14 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
         Will NOT remove API assignments (protected). Only clears session assignments.
         """
         if year is None:
-            year = selected_year_reactive.get()
+            year = _snapshot["year"]
 
         if not 1 <= month <= 12:
             return {"success": False, "message": f"Invalid month: {month}. Must be 1-12."}
 
-        inks = ink_data_reactive.get()
-        session = session_assignments_reactive.get()
-        api = api_assignments_reactive.get()
+        inks = _snapshot["inks"]
+        session = _snapshot["session"]
+        api = _snapshot["api"]
 
         removed = []
         protected = []
@@ -387,6 +417,7 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
 
         if removed:
             session_assignments_reactive.set(new_session)
+            _snapshot["session"] = new_session.copy()
 
         return {
             "success": len(removed) > 0 or len(protected) == 0,
@@ -410,14 +441,14 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
         Returns overview of how many inks are assigned per month and overall statistics.
         """
         if year is None:
-            year = selected_year_reactive.get()
+            year = _snapshot["year"]
 
-        inks = ink_data_reactive.get()
+        inks = _snapshot["inks"]
         if not inks:
             return {"success": False, "message": "No inks available in collection"}
 
         merged = _get_merged_assignments()
-        api = api_assignments_reactive.get()
+        api = _snapshot["api"]
 
         monthly_counts = {month: {"total": 0, "api": 0, "session": 0} for month in range(1, 13)}
         total_assigned = 0
@@ -462,7 +493,264 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
             "monthly_summary": monthly_summary
         }
 
-    return [
+    def find_available_inks_for_theme(
+        query: Optional[str] = None,
+        color: Optional[str] = None,
+        brand: Optional[str] = None,
+        include_session_assigned: bool = True,
+        limit: int = 20
+    ) -> Dict[str, Any]:
+        """
+        Find inks that could fill gaps in the schedule or be reshuffled for better organization.
+
+        Use this tool after moving inks to find candidates for backfilling empty slots.
+        Returns both unassigned inks AND session-assigned inks (which can be moved).
+        API-assigned inks are never returned since they cannot be moved.
+
+        Args:
+            query: Optional text to search in ink names or properties (e.g., "shimmer", "sheen")
+            color: Optional color tag to filter by (e.g., "blue", "green", "red")
+            brand: Optional brand name to filter by
+            include_session_assigned: If True (default), include inks with session assignments
+                                      that could be reshuffled. If False, only unassigned inks.
+            limit: Maximum number of results to return (default 20)
+
+        Returns:
+            List of available inks with their current assignment status:
+            - "unassigned": Not assigned anywhere, ready to use
+            - "session_assigned": Assigned by you this session, can be moved if reshuffling improves the schedule
+        """
+        inks = _snapshot["inks"]
+
+        if not inks:
+            return {"success": False, "message": "No inks available in collection"}
+
+        api = _snapshot["api"]
+        session = _snapshot["session"]
+
+        # Build reverse lookups: ink_idx -> date
+        api_assigned_indices = set(api.values())
+        session_idx_to_date = {idx: date for date, idx in session.items()}
+
+        def matches_filters(ink: dict) -> bool:
+            """Check if ink matches all provided filters."""
+            if query:
+                query_lower = query.lower()
+                name_match = query_lower in ink.get("name", "").lower()
+                brand_match = query_lower in ink.get("brand_name", "").lower()
+                tags = ink.get("cluster_tags", [])
+                tag_match = any(query_lower in tag.lower() for tag in tags)
+                comment = ink.get("private_comment", "")
+                comment_match = query_lower in comment.lower() if comment else False
+
+                if not (name_match or brand_match or tag_match or comment_match):
+                    return False
+
+            if color:
+                tags = ink.get("cluster_tags", [])
+                if not any(color.lower() in tag.lower() for tag in tags):
+                    return False
+
+            if brand:
+                if brand.lower() not in ink.get("brand_name", "").lower():
+                    return False
+
+            return True
+
+        available_inks = []
+        counts = {"unassigned": 0, "session_assigned": 0, "api_assigned": 0}
+
+        for idx, ink in enumerate(inks):
+            # Categorize the ink
+            if idx in api_assigned_indices:
+                counts["api_assigned"] += 1
+                continue  # Never include API-assigned inks
+
+            if idx in session_idx_to_date:
+                counts["session_assigned"] += 1
+                if not include_session_assigned:
+                    continue
+                status = "session_assigned"
+                current_date = session_idx_to_date[idx]
+            else:
+                counts["unassigned"] += 1
+                status = "unassigned"
+                current_date = None
+
+            if not matches_filters(ink):
+                continue
+
+            ink_info = {
+                "index": idx,
+                "brand": ink.get("brand_name", "Unknown"),
+                "name": ink.get("name", "Unknown"),
+                "color_tags": ink.get("cluster_tags", []),
+                "status": status
+            }
+            if current_date:
+                ink_info["current_date"] = current_date
+
+            available_inks.append(ink_info)
+
+            if len(available_inks) >= limit:
+                break
+
+        return {
+            "success": True,
+            "collection_summary": {
+                "total_inks": len(inks),
+                "unassigned": counts["unassigned"],
+                "session_assigned": counts["session_assigned"],
+                "api_assigned_immovable": counts["api_assigned"]
+            },
+            "matches_returned": len(available_inks),
+            "filters_applied": {
+                "query": query,
+                "color": color,
+                "brand": brand,
+                "include_session_assigned": include_session_assigned
+            },
+            "available_inks": available_inks,
+            "hint": "Unassigned inks can be directly assigned. Session-assigned inks can be moved to improve the overall schedule."
+        }
+
+    def set_month_theme(month: int, theme: str, description: str = "",
+                        year: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Set a theme name and description for a specific month.
+
+        Use this after assigning inks to a month to give it a cohesive theme name
+        that describes the collection of inks assigned to that month.
+
+        Args:
+            month: Month number (1-12)
+            theme: Short theme name (e.g., "Winter Blues", "Autumn Warmth")
+            description: Longer description of the theme (e.g., "Cool tones to match the winter sky")
+            year: Year (defaults to currently selected year)
+
+        Returns:
+            Success status and the saved theme information.
+        """
+        if session_themes_reactive is None:
+            return {"success": False, "message": "Theme storage not available"}
+
+        if year is None:
+            year = _snapshot["year"]
+
+        if not 1 <= month <= 12:
+            return {"success": False, "message": f"Invalid month: {month}. Must be 1-12."}
+
+        if not theme or not theme.strip():
+            return {"success": False, "message": "Theme name cannot be empty"}
+
+        month_key = f"{year}-{month:02d}"
+        themes = _snapshot["themes"].copy()
+        themes[month_key] = {
+            "theme": theme.strip(),
+            "description": description.strip() if description else ""
+        }
+        session_themes_reactive.set(themes)
+        _snapshot["themes"] = themes.copy()
+
+        return {
+            "success": True,
+            "message": f"Set theme for {calendar.month_name[month]} {year}",
+            "month": month,
+            "month_name": calendar.month_name[month],
+            "year": year,
+            "theme": theme.strip(),
+            "description": description.strip() if description else "",
+            "note": "Theme saved to session. Use Save Session to persist."
+        }
+
+    def get_month_theme(month: int, year: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Get the theme for a specific month.
+
+        Args:
+            month: Month number (1-12)
+            year: Year (defaults to currently selected year)
+
+        Returns:
+            Theme information if set, or indication that no theme exists.
+        """
+        if year is None:
+            year = _snapshot["year"]
+
+        if not 1 <= month <= 12:
+            return {"success": False, "message": f"Invalid month: {month}. Must be 1-12."}
+
+        month_key = f"{year}-{month:02d}"
+
+        # Check session themes first
+        themes = _snapshot["themes"]
+        if month_key in themes:
+                theme_data = themes[month_key]
+                return {
+                    "success": True,
+                    "month": month,
+                    "month_name": calendar.month_name[month],
+                    "year": year,
+                    "theme": theme_data.get("theme", ""),
+                    "description": theme_data.get("description", ""),
+                    "source": "session"
+                }
+
+        return {
+            "success": True,
+            "month": month,
+            "month_name": calendar.month_name[month],
+            "year": year,
+            "theme": None,
+            "description": None,
+            "message": "No theme set for this month"
+        }
+
+    def clear_month_theme(month: int, year: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Remove the theme for a specific month.
+
+        Args:
+            month: Month number (1-12)
+            year: Year (defaults to currently selected year)
+
+        Returns:
+            Success status.
+        """
+        if session_themes_reactive is None:
+            return {"success": False, "message": "Theme storage not available"}
+
+        if year is None:
+            year = _snapshot["year"]
+
+        if not 1 <= month <= 12:
+            return {"success": False, "message": f"Invalid month: {month}. Must be 1-12."}
+
+        month_key = f"{year}-{month:02d}"
+        themes = _snapshot["themes"].copy()
+
+        if month_key not in themes:
+            return {
+                "success": True,
+                "message": f"No theme was set for {calendar.month_name[month]} {year}",
+                "month": month,
+                "year": year
+            }
+
+        del themes[month_key]
+        session_themes_reactive.set(themes)
+        _snapshot["themes"] = themes.copy()
+
+        return {
+            "success": True,
+            "message": f"Cleared theme for {calendar.month_name[month]} {year}",
+            "month": month,
+            "month_name": calendar.month_name[month],
+            "year": year
+        }
+
+    # Return tool functions AND the snapshot updater
+    tools = [
         list_all_inks,
         search_inks,
         get_month_assignments,
@@ -470,5 +758,10 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
         bulk_assign_month,
         unassign_ink_from_date,
         clear_month_assignments,
-        get_current_assignments_summary
+        get_current_assignments_summary,
+        find_available_inks_for_theme,
+        set_month_theme,
+        get_month_theme,
+        clear_month_theme
     ]
+    return tools, update_snapshot

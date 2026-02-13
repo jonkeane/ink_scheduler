@@ -255,3 +255,4 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+.posit/publish/**.toml
