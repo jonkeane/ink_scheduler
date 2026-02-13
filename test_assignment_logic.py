@@ -9,6 +9,11 @@ from assignment_logic import (
     has_assignment,
     find_ink_by_name,
     search_inks,
+    get_swatch_data,
+    parse_theme_from_comment,
+    create_explicit_assignments_only,
+    move_ink_assignment,
+    MoveResult,
 )
 
 
@@ -242,6 +247,327 @@ def test_search_inks_by_brand():
     results = search_inks(inks, 2025, brand="pilot")
     assert len(results) == 1
     assert results[0]["brand"] == "Pilot"
+
+
+# =============================================================================
+# Tests for get_swatch_data
+# =============================================================================
+
+def test_get_swatch_data_valid():
+    """Test getting valid swatch data dict"""
+    comment = '{"swatch2026": {"date": "2026-01-15", "theme": "Test"}}'
+    result = get_swatch_data(comment, 2026)
+    assert result == {"date": "2026-01-15", "theme": "Test"}
+
+
+def test_get_swatch_data_not_a_dict():
+    """Test swatch key exists but value is not a dict"""
+    comment = '{"swatch2026": "2026-01-15"}'
+    result = get_swatch_data(comment, 2026)
+    assert result is None
+
+
+def test_get_swatch_data_missing_key():
+    """Test missing swatch key"""
+    comment = '{"other": "value"}'
+    result = get_swatch_data(comment, 2026)
+    assert result is None
+
+
+def test_get_swatch_data_invalid_json():
+    """Test invalid JSON comment"""
+    result = get_swatch_data("not json", 2026)
+    assert result is None
+
+
+# =============================================================================
+# Tests for parse_theme_from_comment
+# =============================================================================
+
+def test_parse_theme_from_comment_both_fields():
+    """Test parsing theme with both theme and theme_description"""
+    comment = '{"swatch2026": {"theme": "Winter", "theme_description": "Cold inks"}}'
+    result = parse_theme_from_comment(comment, 2026)
+    assert result == {"theme": "Winter", "theme_description": "Cold inks"}
+
+
+def test_parse_theme_from_comment_only_theme():
+    """Test parsing with only theme field"""
+    comment = '{"swatch2026": {"theme": "Winter"}}'
+    result = parse_theme_from_comment(comment, 2026)
+    assert result == {"theme": "Winter", "theme_description": ""}
+
+
+def test_parse_theme_from_comment_only_description():
+    """Test parsing with only theme_description field"""
+    comment = '{"swatch2026": {"theme_description": "Cold inks"}}'
+    result = parse_theme_from_comment(comment, 2026)
+    assert result == {"theme": "", "theme_description": "Cold inks"}
+
+
+def test_parse_theme_from_comment_no_swatch_data():
+    """Test parsing with no swatch data for year"""
+    comment = '{"swatch2025": {"theme": "Winter"}}'
+    result = parse_theme_from_comment(comment, 2026)
+    assert result is None
+
+
+def test_parse_theme_from_comment_no_theme_fields():
+    """Test parsing with swatch data but no theme fields"""
+    comment = '{"swatch2026": {"date": "2026-01-15"}}'
+    result = parse_theme_from_comment(comment, 2026)
+    assert result is None
+
+
+# =============================================================================
+# Tests for create_explicit_assignments_only
+# =============================================================================
+
+def test_create_explicit_assignments_empty_list():
+    """Test with empty ink list"""
+    result = create_explicit_assignments_only([], 2026)
+    assert result == {}
+
+
+def test_create_explicit_assignments_single_ink():
+    """Test with single ink with valid assignment"""
+    inks = [
+        {"private_comment": '{"swatch2026": {"date": "2026-01-15"}}'}
+    ]
+    result = create_explicit_assignments_only(inks, 2026)
+    assert result == {"2026-01-15": 0}
+
+
+def test_create_explicit_assignments_multiple_inks():
+    """Test with multiple inks with assignments"""
+    inks = [
+        {"private_comment": '{"swatch2026": {"date": "2026-01-15"}}'},
+        {"private_comment": '{"swatch2026": {"date": "2026-01-20"}}'},
+        {"private_comment": '{"swatch2026": {"date": "2026-02-01"}}'},
+    ]
+    result = create_explicit_assignments_only(inks, 2026)
+    assert result == {"2026-01-15": 0, "2026-01-20": 1, "2026-02-01": 2}
+
+
+def test_create_explicit_assignments_duplicate_dates():
+    """Test duplicate date assignments - first wins"""
+    inks = [
+        {"private_comment": '{"swatch2026": {"date": "2026-01-15"}}'},
+        {"private_comment": '{"swatch2026": {"date": "2026-01-15"}}'},  # duplicate
+    ]
+    result = create_explicit_assignments_only(inks, 2026)
+    assert result == {"2026-01-15": 0}  # first ink wins
+
+
+def test_create_explicit_assignments_mixed():
+    """Test inks with and without assignments"""
+    inks = [
+        {"private_comment": '{"swatch2026": {"date": "2026-01-15"}}'},
+        {"private_comment": ""},  # no assignment
+        {"private_comment": '{"swatch2026": {"date": "2026-01-20"}}'},
+    ]
+    result = create_explicit_assignments_only(inks, 2026)
+    assert result == {"2026-01-15": 0, "2026-01-20": 2}
+
+
+# =============================================================================
+# Tests for MoveResult
+# =============================================================================
+
+def test_move_result_success():
+    """Test MoveResult success case"""
+    result = MoveResult(True, "Assignment successful", operation="assign")
+    assert result.success is True
+    assert result.message == "Assignment successful"
+    assert result.data == {"operation": "assign"}
+
+
+def test_move_result_failure():
+    """Test MoveResult failure case"""
+    result = MoveResult(False, "Date is protected", protected=True)
+    assert result.success is False
+    assert result.message == "Date is protected"
+    assert result.data == {"protected": True}
+
+
+def test_move_result_to_dict():
+    """Test MoveResult to_dict method"""
+    result = MoveResult(True, "Done", operation="move", from_date="2026-01-15")
+    d = result.to_dict()
+    assert d == {
+        "success": True,
+        "message": "Done",
+        "operation": "move",
+        "from_date": "2026-01-15"
+    }
+
+
+# =============================================================================
+# Tests for move_ink_assignment
+# =============================================================================
+
+class TestMoveInkAssignmentValidation:
+    """Tests for move_ink_assignment validation errors"""
+
+    def test_no_dates_provided(self):
+        """Test error when neither from_date nor to_date provided"""
+        session = {}
+        api = {}
+        new_session, result = move_ink_assignment(session, api, None, None)
+        assert result.success is False
+        assert "Must specify" in result.message
+        assert new_session == session
+
+    def test_invalid_from_date_format(self):
+        """Test error for invalid from_date format"""
+        session = {"bad-date": 0}
+        api = {}
+        new_session, result = move_ink_assignment(session, api, "bad-date", None)
+        assert result.success is False
+        assert "Invalid from_date format" in result.message
+
+    def test_invalid_to_date_format(self):
+        """Test error for invalid to_date format"""
+        session = {}
+        api = {}
+        new_session, result = move_ink_assignment(session, api, None, "bad-date", ink_idx=0)
+        assert result.success is False
+        assert "Invalid to_date format" in result.message
+
+
+class TestMoveInkAssignmentAssign:
+    """Tests for move_ink_assignment assign operation (from_date=None)"""
+
+    def test_assign_success(self):
+        """Test successful assign to empty date"""
+        session = {}
+        api = {}
+        new_session, result = move_ink_assignment(session, api, None, "2026-01-15", ink_idx=0)
+        assert result.success is True
+        assert new_session == {"2026-01-15": 0}
+        assert result.data["operation"] == "assign"
+
+    def test_assign_to_api_protected_date(self):
+        """Test assign fails when to_date is API-protected"""
+        session = {}
+        api = {"2026-01-15": 5}
+        new_session, result = move_ink_assignment(session, api, None, "2026-01-15", ink_idx=0)
+        assert result.success is False
+        assert "protected" in result.message.lower()
+        assert new_session == session
+
+    def test_assign_ink_already_assigned(self):
+        """Test assign fails when ink is already assigned elsewhere"""
+        session = {"2026-01-10": 0}
+        api = {}
+        new_session, result = move_ink_assignment(session, api, None, "2026-01-15", ink_idx=0)
+        assert result.success is False
+        assert "already assigned" in result.message.lower()
+        assert result.data.get("assigned_date") == "2026-01-10"
+
+    def test_assign_with_displacement(self):
+        """Test assign overwrites existing session assignment"""
+        session = {"2026-01-15": 5}  # existing assignment
+        api = {}
+        new_session, result = move_ink_assignment(session, api, None, "2026-01-15", ink_idx=0)
+        assert result.success is True
+        assert new_session == {"2026-01-15": 0}
+        assert result.data.get("displaced_ink_idx") == 5
+
+    def test_assign_without_ink_idx(self):
+        """Test assign fails without ink_idx"""
+        session = {}
+        api = {}
+        new_session, result = move_ink_assignment(session, api, None, "2026-01-15")
+        assert result.success is False
+        assert "ink_idx is required" in result.message
+
+    def test_assign_with_ink_info(self):
+        """Test assign includes ink info when inks provided"""
+        session = {}
+        api = {}
+        inks = [{"brand_name": "Diamine", "name": "Blue Velvet"}]
+        new_session, result = move_ink_assignment(session, api, None, "2026-01-15", ink_idx=0, inks=inks)
+        assert result.success is True
+        assert result.data.get("ink_brand") == "Diamine"
+        assert result.data.get("ink_name") == "Blue Velvet"
+
+
+class TestMoveInkAssignmentUnassign:
+    """Tests for move_ink_assignment unassign operation (to_date=None)"""
+
+    def test_unassign_success(self):
+        """Test successful unassign from session date"""
+        session = {"2026-01-15": 0}
+        api = {}
+        new_session, result = move_ink_assignment(session, api, "2026-01-15", None)
+        assert result.success is True
+        assert new_session == {}
+        assert result.data["operation"] == "unassign"
+
+    def test_unassign_api_protected(self):
+        """Test unassign fails when from_date is API-protected"""
+        session = {}
+        api = {"2026-01-15": 0}
+        new_session, result = move_ink_assignment(session, api, "2026-01-15", None)
+        assert result.success is False
+        assert "protected" in result.message.lower()
+
+    def test_unassign_no_session_assignment(self):
+        """Test unassign fails when from_date has no session assignment"""
+        session = {}
+        api = {}
+        new_session, result = move_ink_assignment(session, api, "2026-01-15", None)
+        assert result.success is False
+        assert "No session assignment" in result.message
+
+    def test_unassign_ink_idx_mismatch(self):
+        """Test unassign fails with ink index mismatch"""
+        session = {"2026-01-15": 0}
+        api = {}
+        new_session, result = move_ink_assignment(session, api, "2026-01-15", None, ink_idx=5)
+        assert result.success is False
+        assert "mismatch" in result.message.lower()
+
+
+class TestMoveInkAssignmentMove:
+    """Tests for move_ink_assignment move operation (both dates set)"""
+
+    def test_move_success(self):
+        """Test successful move from one date to another"""
+        session = {"2026-01-15": 0}
+        api = {}
+        new_session, result = move_ink_assignment(session, api, "2026-01-15", "2026-01-20")
+        assert result.success is True
+        assert new_session == {"2026-01-20": 0}
+        assert result.data["operation"] == "move"
+        assert result.data["from_date"] == "2026-01-15"
+        assert result.data["to_date"] == "2026-01-20"
+
+    def test_move_from_api_protected(self):
+        """Test move fails when from_date is API-protected"""
+        session = {}
+        api = {"2026-01-15": 0}
+        new_session, result = move_ink_assignment(session, api, "2026-01-15", "2026-01-20")
+        assert result.success is False
+        assert "protected" in result.message.lower()
+
+    def test_move_to_api_protected(self):
+        """Test move fails when to_date is API-protected"""
+        session = {"2026-01-15": 0}
+        api = {"2026-01-20": 5}
+        new_session, result = move_ink_assignment(session, api, "2026-01-15", "2026-01-20")
+        assert result.success is False
+        assert "protected" in result.message.lower()
+
+    def test_move_with_displacement(self):
+        """Test move with displacement at target date"""
+        session = {"2026-01-15": 0, "2026-01-20": 5}
+        api = {}
+        new_session, result = move_ink_assignment(session, api, "2026-01-15", "2026-01-20")
+        assert result.success is True
+        assert new_session == {"2026-01-20": 0}  # ink 0 moved, ink 5 displaced
+        assert result.data.get("displaced_ink_idx") == 5
 
 
 if __name__ == "__main__":
