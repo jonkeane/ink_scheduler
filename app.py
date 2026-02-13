@@ -27,14 +27,14 @@ app_ui = ui.page_fluid(
 
     ui.layout_sidebar(
         ui.sidebar(
-            ui.input_action_button("fetch_inks", "Fetch My Inks", class_="btn-primary", style="width: 100%;"),
+            ui.input_action_button("fetch_inks", "Fetch My Inks", class_="btn-primary sidebar-btn-full"),
             ui.output_text("cache_status", inline=True),
             ui.h4("AI Organizer"),
             ui.chat_ui("ink_chat", height="400px"),
             ui.output_text("session_status", inline=True),
-            ui.download_button("save_session", "Save Session", class_="btn-outline-secondary", style="width: 100%;"),
+            ui.download_button("save_session", "Save Session", class_="btn-outline-secondary sidebar-btn-full"),
             ui.input_file("load_session", None, accept=[".json"], button_label="Load Session", multiple=False),
-            ui.input_action_button("open_settings", "Settings", class_="btn-outline-secondary", style="width: 100%;"),
+            ui.input_action_button("open_settings", "Settings", class_="btn-outline-secondary sidebar-btn-full"),
             width=400
         ),
 
@@ -43,7 +43,7 @@ app_ui = ui.page_fluid(
             ui.nav_panel("Ink Calendar",
                 ui.div(
                     ui.input_switch("view_mode", "List View", value=False, width="auto"),
-                    ui.input_action_button("prev_month", "←", class_="btn-secondary btn-sm", style="margin-left: 20px;"),
+                    ui.input_action_button("prev_month", "←", class_="btn-secondary btn-sm nav-btn-prev"),
                     ui.div(
                         ui.output_ui("month_label"),
                         ui.input_numeric("year", None, value=datetime.now().year,
@@ -52,7 +52,7 @@ app_ui = ui.page_fluid(
                     ),
                     ui.input_action_button("next_month", "→", class_="btn-secondary btn-sm"),
                     ui.output_ui("theme_label"),
-                    style="display: flex; align-items: baseline; gap: 8px; margin-top: 15px;"
+                    class_="nav-controls"
                 ),
                 ui.output_ui("main_view")
             ),
@@ -145,7 +145,7 @@ def server(input, output, session):
                           selected="openai"),
             ui.input_password("llm_api_key", "LLM API Key",
                             placeholder="Enter your LLM API key"),
-            ui.input_action_button("clear_token", "Clear Token", class_="btn-secondary", style="width: 100%; margin-bottom: 10px;"),
+            ui.input_action_button("clear_token", "Clear Token", class_="btn-secondary sidebar-btn-full clear-token"),
             title="Settings",
             easy_close=True,
             footer=ui.input_action_button("close_settings", "Save & Close", class_="btn-primary")
@@ -167,6 +167,7 @@ def server(input, output, session):
     chat_initialized = reactive.Value(False)  # Track if chat has been initialized
     selected_year = reactive.Value(datetime.now().year)  # Track selected year for LLM tools
     ink_picker_date = reactive.Value(None)  # Track which date's ink picker is open
+    initial_year_set = reactive.Value(False)  # Track if year has been initialized (skip first clear)
 
     # Load inks from cache on startup
     @reactive.Effect
@@ -176,6 +177,20 @@ def server(input, output, session):
             inks = cache.get("inks", [])
             ink_data.set(inks)
             ui.notification_show(f"Loaded {len(inks)} inks from cache", type="message", duration=3)
+
+    # Load default session on startup if it exists
+    @reactive.Effect
+    def load_default_session():
+        import json
+        default_session_path = "session_default.json"
+        if os.path.exists(default_session_path):
+            try:
+                with open(default_session_path, "r") as f:
+                    loaded = json.load(f)
+                session_assignments.set(loaded)
+                ui.notification_show(f"Loaded default session ({len(loaded)} assignments)", type="message", duration=3)
+            except Exception as e:
+                ui.notification_show(f"Error loading default session: {str(e)}", type="warning")
 
     # Update API assignments when ink_data changes (these are protected/read-only)
     @reactive.Effect
@@ -206,9 +221,14 @@ def server(input, output, session):
         # Get explicit assignments from API cache
         explicit = create_explicit_assignments_only(inks, year)
 
-        # Update API assignments and clear session assignments for new year
+        # Update API assignments
         api_assignments.set(explicit)
-        session_assignments.set({})  # Clear session when year changes
+
+        # Clear session assignments only on subsequent year changes (not initial load)
+        if initial_year_set.get():
+            session_assignments.set({})
+        else:
+            initial_year_set.set(True)
 
     # Helper to get merged assignments (API takes precedence over session)
     def get_merged_assignments_dict():
@@ -278,7 +298,7 @@ def server(input, output, session):
         year = input.year()
         month = current_month.get()
         month_name = datetime(year, month, 1).strftime("%B")
-        return ui.span(month_name, style="font-weight: 600; font-size: 1.1em;")
+        return ui.span(month_name, class_="month-label")
 
     # Theme label for header
     @output
@@ -306,10 +326,10 @@ def server(input, output, session):
             return ui.span()
 
         return ui.span(
-            ui.strong(theme_info["theme"], style="color: #555;"),
-            ui.span(" — ", style="color: #999;"),
-            ui.span(theme_info["theme_description"], style="color: #777; font-style: italic;"),
-            style="margin-left: 15px; padding-left: 15px; border-left: 2px solid #ddd;"
+            ui.strong(theme_info["theme"], class_="theme-name"),
+            ui.span(" — ", class_="theme-separator"),
+            ui.span(theme_info["theme_description"], class_="theme-description"),
+            class_="theme-container"
         )
 
     # Navigate to previous month
@@ -765,13 +785,13 @@ def server(input, output, session):
 
         # Header row
         header = ui.div(
-            *[ui.div(day, style="font-weight: bold; text-align: center; padding: 10px;")
+            *[ui.div(day, class_="calendar-weekday")
               for day in weekdays],
-            style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px;"
+            class_="calendar-header"
         )
         
         # Calendar days - use actual empty divs for grid cells before first day
-        cells = [ui.div(style="min-height: 100px;") for _ in range(first_weekday)]
+        cells = [ui.div(class_="calendar-cell-empty") for _ in range(first_weekday)]
         
         for day in range(1, num_days + 1):
             date_str = f"{year}-{month:02d}-{day:02d}"
@@ -791,18 +811,18 @@ def server(input, output, session):
                 # Build cell content with optional remove button
                 cell_components = [
                     ui.div(
-                        ui.strong(str(day), style="font-size: 0.9em;"),
+                        ui.strong(str(day), class_="calendar-day-number"),
                         ui.div(ink_swatch_svg(ink_color, "lg")),
-                        style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px;"
+                        class_="calendar-cell-header"
                     ),
-                    ui.span(brand, style="font-size: 0.75em; color: #666; display: block;"),
-                    ui.span(ink_name, style="font-size: 0.85em; font-weight: 500; display: block; margin-top: 2px;")
+                    ui.span(brand, class_="calendar-brand"),
+                    ui.span(ink_name, class_="calendar-ink-name")
                 ]
 
                 # Build the main content div
                 main_content = ui.div(
                     *cell_components,
-                    style="padding: 10px;"
+                    class_="calendar-cell-content"
                 )
 
                 # Build the cell with optional remove button overlay
@@ -810,34 +830,33 @@ def server(input, output, session):
                     remove_btn = ui.input_action_button(
                         f"remove_{date_str.replace('-', '_')}",
                         "✕",
-                        class_="btn-sm",
-                        style="position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; padding: 0; border-radius: 50%; background-color: #999; color: white; border: none; font-size: 0.7em; line-height: 20px; text-align: center;"
+                        class_="btn-sm calendar-remove-btn"
                     )
                     cell_content = ui.div(
                         remove_btn,
                         main_content,
-                        style="position: relative; border: 1px solid #ddd; min-height: 120px; background-color: #f9f9f9;"
+                        class_="calendar-cell-assigned"
                     )
                 else:
                     cell_content = ui.div(
                         main_content,
-                        style="border: 1px solid #ddd; min-height: 120px; background-color: #f9f9f9;"
+                        class_="calendar-cell-assigned"
                     )
             else:
                 cell_content = ui.div(
                     ui.strong(str(day)),
-                    style="border: 1px solid #ddd; padding: 10px; min-height: 100px;"
+                    class_="calendar-cell"
                 )
             
             cells.append(cell_content)
         
         # Fill remaining cells with empty divs
         while len(cells) % 7 != 0:
-            cells.append(ui.div(style="min-height: 100px;"))
+            cells.append(ui.div(class_="calendar-cell-empty"))
         
         calendar_grid = ui.div(
             *cells,
-            style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px;"
+            class_="calendar-grid"
         )
 
         return ui.div(header, calendar_grid)
@@ -856,12 +875,12 @@ def server(input, output, session):
 
         # Table header
         header_row = ui.div(
-            ui.div("Date", style="width: 120px; font-weight: bold;"),
-            ui.div("Color", style="width: 50px; font-weight: bold;"),
-            ui.div("Brand", style="width: 250px; font-weight: bold;"),
-            ui.div("Name", style="flex: 1; font-weight: bold;"),
-            ui.div("Actions", style="font-weight: bold;"),
-            style="display: flex; padding: 10px 15px; background: #e9ecef; border-bottom: 2px solid #dee2e6;"
+            ui.div("Date", class_="list-col-date"),
+            ui.div("Color", class_="list-col-color"),
+            ui.div("Brand", class_="list-col-brand"),
+            ui.div("Name", class_="list-col-name"),
+            ui.div("Actions", class_="list-col-actions"),
+            class_="list-header-row"
         )
 
         rows = []
@@ -875,7 +894,7 @@ def server(input, output, session):
             # Date column
             date_col = ui.div(
                 ui.strong(date_obj.strftime("%a, %b %d")),
-                style="width: 120px; color: #333;"
+                class_="list-date-col"
             )
 
             if ink_idx is not None and ink_idx < len(inks):
@@ -892,8 +911,8 @@ def server(input, output, session):
                 swatch = ink_swatch_svg(color, "sm")
 
                 # Brand and name columns
-                brand_col = ui.div(brand, style="width: 250px; overflow: hidden; text-overflow: ellipsis;")
-                name_col = ui.div(name, style="flex: 1; overflow: hidden; text-overflow: ellipsis;")
+                brand_col = ui.div(brand, class_="list-brand-col")
+                name_col = ui.div(name, class_="list-name-col")
 
                 # Actions column
                 if can_edit:
@@ -902,27 +921,26 @@ def server(input, output, session):
                         ui.input_action_button(
                             f"remove_{date_str.replace('-', '_')}",
                             "Remove",
-                            class_="btn-sm btn-outline-danger",
-                            style="margin-left: 10px; padding: 2px 8px;"
+                            class_="btn-sm btn-outline-danger list-remove-btn"
                         )
                     ]
-                    action_col = ui.div(*action_components, style="display: flex; align-items: center;")
+                    action_col = ui.div(*action_components, class_="list-actions-col")
                 elif is_api:
                     action_col = ui.div(
-                        ui.span(date_obj.strftime("%b %d, %Y"), style="margin-right: 10px;"),
-                        ui.span("swatched", style="padding: 2px 6px; background: #e9ecef; border-radius: 4px; font-size: 0.75em; color: #666;"),
-                        style="display: flex; align-items: center;"
+                        ui.span(date_obj.strftime("%b %d, %Y"), class_="api-date-display"),
+                        ui.span("swatched", class_="api-badge"),
+                        class_="list-actions-col"
                     )
                 else:
                     action_col = ui.div()
 
                 row = ui.div(
                     date_col,
-                    ui.div(swatch, style="width: 50px;"),
+                    ui.div(swatch, class_="list-swatch-col"),
                     brand_col,
                     name_col,
                     action_col,
-                    style="display: flex; align-items: center; padding: 8px 15px; border-bottom: 1px solid #eee;"
+                    class_="list-row"
                 )
             else:
                 # Unassigned day - with ink bottle icon to assign
@@ -942,22 +960,22 @@ def server(input, output, session):
 
                 row = ui.div(
                     date_col,
-                    ui.div(style="width: 50px;"),
-                    ui.div(style="width: 250px;"),
+                    ui.div(class_="list-swatch-col"),
+                    ui.div(class_="list-brand-col"),
                     ui.div(
-                        ui.span("Unassigned", style="color: #999; font-style: italic;"),
-                        style="flex: 1; display: flex; align-items: center;"
+                        ui.span("Unassigned", class_="list-unassigned-text"),
+                        class_="list-unassigned-name-col"
                     ),
-                    ui.div(assign_button, style="display: flex; align-items: center;"),
-                    style="display: flex; align-items: center; padding: 8px 15px; border-bottom: 1px solid #eee; background: #fafafa;"
+                    ui.div(assign_button, class_="list-actions-col"),
+                    class_="list-row-unassigned"
                 )
 
             rows.append(row)
 
-        list_content = ui.div(*rows, style="max-height: 600px; overflow-y: auto;")
+        list_content = ui.div(*rows, class_="list-content")
 
         return ui.div(header_row, list_content)
-    
+
     # Ink collection view with search and inline assignment
     @output
     @render.ui
@@ -979,11 +997,11 @@ def server(input, output, session):
 
         # Table header
         header_row = ui.div(
-            ui.div("Color", style="width: 50px; font-weight: bold;"),
-            ui.div("Brand", style="width: 250px; font-weight: bold;"),
-            ui.div("Name", style="flex: 1; font-weight: bold;"),
-            ui.div("Assignment", style="font-weight: bold;"),
-            style="display: flex; padding: 10px 15px; background: #e9ecef; border-bottom: 2px solid #dee2e6;"
+            ui.div("Color", class_="list-col-color"),
+            ui.div("Brand", class_="list-col-brand"),
+            ui.div("Name", class_="list-col-name"),
+            ui.div("Assignment", class_="list-col-actions"),
+            class_="ink-collection-header"
         )
 
         rows = []
@@ -1002,8 +1020,8 @@ def server(input, output, session):
             swatch = ink_swatch_svg(color, "sm")
 
             # Brand and name columns
-            brand_col = ui.div(brand, style="width: 150px; overflow: hidden; text-overflow: ellipsis;")
-            name_col = ui.div(name, style="flex: 1; overflow: hidden; text-overflow: ellipsis;")
+            brand_col = ui.div(brand, class_="ink-collection-brand-col")
+            name_col = ui.div(name, class_="list-name-col")
 
             # Assignment column
             is_api = assigned_date and assigned_date in api
@@ -1013,9 +1031,9 @@ def server(input, output, session):
                 # API assignment - read only
                 date_obj = datetime.strptime(assigned_date, "%Y-%m-%d")
                 assign_col = ui.div(
-                    ui.span(date_obj.strftime("%b %d, %Y"), style="margin-right: 10px;"),
-                    ui.span("swatched", style="padding: 2px 6px; background: #e9ecef; border-radius: 4px; font-size: 0.75em; color: #666;"),
-                    style="display: flex; align-items: center;"
+                    ui.span(date_obj.strftime("%b %d, %Y"), class_="api-date-display"),
+                    ui.span("swatched", class_="api-badge"),
+                    class_="ink-collection-assign-col"
                 )
             else:
                 # Editable - date picker for both session and unassigned
@@ -1025,25 +1043,24 @@ def server(input, output, session):
                     components.append(ui.input_action_button(
                         f"ink_remove_{idx}",
                         "Remove",
-                        class_="btn-sm btn-outline-danger",
-                        style="margin-right: 10px; padding: 2px 8px;"
+                        class_="btn-sm btn-outline-danger ink-collection-remove-btn"
                     ))
-                components.append(ui.div(ui.input_date(f"ink_date_{idx}", "", value=date_value), style="width: 150px;"))
-                assign_col = ui.div(*components, style="display: flex; align-items: center;")
+                components.append(ui.div(ui.input_date(f"ink_date_{idx}", "", value=date_value), class_="ink-collection-date-picker"))
+                assign_col = ui.div(*components, class_="ink-collection-assign-col")
 
             row = ui.div(
-                ui.div(swatch, style="width: 50px;"),
+                ui.div(swatch, class_="list-swatch-col"),
                 brand_col,
                 name_col,
                 assign_col,
-                style="display: flex; align-items: center; padding: 8px 15px; border-bottom: 1px solid #eee;"
+                class_="list-row"
             )
             rows.append(row)
 
         count_text = f"Showing {len(rows)} of {len(inks)} inks" if search_term else f"{len(inks)} inks"
-        count_display = ui.div(count_text, style="color: #666; font-size: 0.9em; margin-bottom: 10px;")
+        count_display = ui.div(count_text, class_="ink-collection-count")
 
-        list_content = ui.div(*rows, style="max-height: 600px; overflow-y: auto;")
+        list_content = ui.div(*rows, class_="list-content")
 
         return ui.div(count_display, header_row, list_content)
     

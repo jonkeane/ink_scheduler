@@ -108,3 +108,240 @@ input#year.form-control:focus {
 .ink-assign-btn svg {
     vertical-align: middle;
 }
+
+/* Sidebar buttons */
+.sidebar-btn-full {
+    width: 100%;
+}
+.sidebar-btn-full.clear-token {
+    margin-bottom: 10px;
+}
+
+/* Navigation controls */
+.nav-controls {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-top: 15px;
+}
+.nav-btn-prev {
+    margin-left: 20px;
+}
+
+/* Month label */
+.month-label {
+    font-weight: 600;
+    font-size: 1.1em;
+}
+
+/* Theme label */
+.theme-container {
+    margin-left: 15px;
+    padding-left: 15px;
+    border-left: 2px solid #ddd;
+}
+.theme-name {
+    color: #555;
+}
+.theme-separator {
+    color: #999;
+}
+.theme-description {
+    color: #777;
+    font-style: italic;
+}
+
+/* Calendar grid */
+.calendar-header {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 5px;
+}
+.calendar-weekday {
+    font-weight: bold;
+    text-align: center;
+    padding: 10px;
+}
+.calendar-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 5px;
+}
+.calendar-cell-empty {
+    min-height: 100px;
+}
+.calendar-cell {
+    border: 1px solid #ddd;
+    padding: 10px;
+    min-height: 100px;
+}
+.calendar-cell-assigned {
+    border: 1px solid #ddd;
+    min-height: 120px;
+    background-color: #f9f9f9;
+    position: relative;
+}
+.calendar-cell-content {
+    padding: 10px;
+}
+.calendar-cell-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 4px;
+}
+.calendar-day-number {
+    font-size: 0.9em;
+}
+.calendar-brand {
+    font-size: 0.75em;
+    color: #666;
+    display: block;
+}
+.calendar-ink-name {
+    font-size: 0.85em;
+    font-weight: 500;
+    display: block;
+    margin-top: 2px;
+}
+.calendar-remove-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border-radius: 50%;
+    background-color: #999;
+    color: white;
+    border: none;
+    font-size: 0.7em;
+    line-height: 20px;
+    text-align: center;
+    opacity: 0;
+    transition: opacity 0.15s ease-in-out;
+}
+.calendar-cell-assigned:hover .calendar-remove-btn {
+    opacity: 1;
+}
+
+/* List view */
+.list-header-row {
+    display: flex;
+    padding: 10px 15px;
+    background: #e9ecef;
+    border-bottom: 2px solid #dee2e6;
+}
+.list-col-date {
+    width: 120px;
+    font-weight: bold;
+}
+.list-col-color {
+    width: 50px;
+    font-weight: bold;
+}
+.list-col-brand {
+    width: 250px;
+    font-weight: bold;
+}
+.list-col-name {
+    flex: 1;
+    font-weight: bold;
+}
+.list-col-actions {
+    font-weight: bold;
+}
+.list-row {
+    display: flex;
+    align-items: center;
+    padding: 8px 15px;
+    border-bottom: 1px solid #eee;
+}
+.list-row-unassigned {
+    display: flex;
+    align-items: center;
+    padding: 8px 15px;
+    border-bottom: 1px solid #eee;
+    background: #fafafa;
+}
+.list-date-col {
+    width: 120px;
+    color: #333;
+}
+.list-swatch-col {
+    width: 50px;
+}
+.list-brand-col {
+    width: 250px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.list-name-col {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.list-actions-col {
+    display: flex;
+    align-items: center;
+}
+.list-unassigned-text {
+    color: #999;
+    font-style: italic;
+}
+.list-unassigned-name-col {
+    flex: 1;
+    display: flex;
+    align-items: center;
+}
+.list-content {
+    max-height: 600px;
+    overflow-y: auto;
+}
+
+/* API assignment badge */
+.api-badge {
+    padding: 2px 6px;
+    background: #e9ecef;
+    border-radius: 4px;
+    font-size: 0.75em;
+    color: #666;
+}
+.api-date-display {
+    margin-right: 10px;
+}
+
+/* Remove button in list view */
+.list-remove-btn {
+    margin-left: 10px;
+    padding: 2px 8px;
+}
+
+/* Ink collection view */
+.ink-collection-header {
+    display: flex;
+    padding: 10px 15px;
+    background: #e9ecef;
+    border-bottom: 2px solid #dee2e6;
+}
+.ink-collection-brand-col {
+    width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ink-collection-assign-col {
+    display: flex;
+    align-items: center;
+}
+.ink-collection-remove-btn {
+    margin-right: 10px;
+    padding: 2px 8px;
+}
+.ink-collection-date-picker {
+    width: 150px;
+}
+.ink-collection-count {
+    color: #666;
+    font-size: 0.9em;
+    margin-bottom: 10px;
+}
