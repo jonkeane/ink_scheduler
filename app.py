@@ -355,6 +355,13 @@ def server(input, output, session):
         month = current_month.get()
         month_key = f"{year}-{month:02d}"
 
+        # Pencil icon SVG for edit button
+        edit_icon = ui.HTML('''<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+             fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+        </svg>''')
+
         # Check session themes first
         themes = session_themes.get()
         if month_key in themes:
@@ -362,36 +369,57 @@ def server(input, output, session):
             theme_name = theme_data.get("theme", "")
             theme_desc = theme_data.get("description", "")
             if theme_name:
-                return ui.span(
-                    ui.strong(theme_name, class_="theme-name"),
-                    ui.span(" — ", class_="theme-separator") if theme_desc else "",
-                    ui.span(theme_desc, class_="theme-description") if theme_desc else "",
+                return ui.div(
+                    ui.span(
+                        ui.strong(theme_name, class_="theme-name"),
+                        ui.span(" — ", class_="theme-separator") if theme_desc else "",
+                        ui.span(theme_desc, class_="theme-description") if theme_desc else "",
+                        class_="theme-text"
+                    ),
+                    ui.input_action_button("edit_theme", edit_icon, class_="theme-edit-btn"),
                     class_="theme-container"
                 )
 
         # Fall back to checking API ink comments
         inks = ink_data.get()
         if not inks:
-            return ui.span()
+            # No data yet - show "+ Theme" button
+            return ui.div(
+                ui.input_action_button("edit_theme", "+ Theme", class_="theme-set-btn"),
+                class_="theme-container"
+            )
 
         daily = get_daily_assignments()
         first_day_str = f"{year}-{month:02d}-01"
         first_day_ink_idx = daily.get(first_day_str)
 
         if first_day_ink_idx is None or first_day_ink_idx >= len(inks):
-            return ui.span()
+            # No theme from API - show "+ Theme" button
+            return ui.div(
+                ui.input_action_button("edit_theme", "+ Theme", class_="theme-set-btn"),
+                class_="theme-container"
+            )
 
         first_day_ink = inks[first_day_ink_idx]
         private_comment = first_day_ink.get("private_comment", "")
         theme_info = parse_theme_from_comment(private_comment, year)
 
         if not theme_info:
-            return ui.span()
+            # No theme from API - show "+ Theme" button
+            return ui.div(
+                ui.input_action_button("edit_theme", "+ Theme", class_="theme-set-btn"),
+                class_="theme-container"
+            )
 
-        return ui.span(
-            ui.strong(theme_info["theme"], class_="theme-name"),
-            ui.span(" — ", class_="theme-separator"),
-            ui.span(theme_info["theme_description"], class_="theme-description"),
+        # API theme exists - show it with edit button
+        return ui.div(
+            ui.span(
+                ui.strong(theme_info["theme"], class_="theme-name"),
+                ui.span(" — ", class_="theme-separator"),
+                ui.span(theme_info["theme_description"], class_="theme-description"),
+                class_="theme-text"
+            ),
+            ui.input_action_button("edit_theme", edit_icon, class_="theme-edit-btn"),
             class_="theme-container"
         )
 
@@ -635,6 +663,80 @@ def server(input, output, session):
         # Close the modal and reset state
         ui.modal_remove()
         ink_picker_date.set(None)
+
+    # Theme editor modal handlers
+    @reactive.Effect
+    @reactive.event(input.edit_theme)
+    def show_theme_editor():
+        """Show the theme editor modal for the current month."""
+        year = input.year()
+        month = current_month.get()
+        month_key = f"{year}-{month:02d}"
+        month_name = datetime(year, month, 1).strftime("%B %Y")
+
+        # Get existing theme if any
+        themes = session_themes.get()
+        existing_theme = themes.get(month_key, {})
+        current_theme_name = existing_theme.get("theme", "")
+        current_theme_desc = existing_theme.get("description", "")
+
+        m = ui.modal(
+            ui.input_text(
+                "theme_name_input",
+                "Theme Name",
+                value=current_theme_name,
+                placeholder="e.g., Winter Blues, Autumn Warmth"
+            ),
+            ui.input_text_area(
+                "theme_description_input",
+                "Description (optional)",
+                value=current_theme_desc,
+                placeholder="e.g., Cool tones to match the winter sky",
+                rows=3
+            ),
+            title=f"Edit Theme - {month_name}",
+            easy_close=True,
+            footer=ui.div(
+                ui.input_action_button("save_theme", "Save", class_="btn-primary"),
+                ui.input_action_button("cancel_theme", "Cancel", class_="btn-secondary"),
+                class_="modal-footer-buttons"
+            ),
+            size="m"
+        )
+        ui.modal_show(m)
+
+    @reactive.Effect
+    @reactive.event(input.save_theme)
+    def save_theme_handler():
+        """Save the theme from the modal."""
+        year = input.year()
+        month = current_month.get()
+        month_key = f"{year}-{month:02d}"
+
+        theme_name = input.theme_name_input().strip()
+        theme_desc = input.theme_description_input().strip()
+
+        if not theme_name:
+            ui.notification_show("Theme name is required", type="warning", duration=3)
+            return
+
+        # Update session themes
+        themes = session_themes.get().copy()
+        themes[month_key] = {
+            "theme": theme_name,
+            "description": theme_desc
+        }
+        session_themes.set(themes)
+
+        ui.modal_remove()
+        ui.notification_show(f"Theme saved for {datetime(year, month, 1).strftime('%B')}",
+                            type="message", duration=2)
+
+    @reactive.Effect
+    @reactive.event(input.cancel_theme)
+    def cancel_theme_handler():
+        """Cancel theme editing."""
+        ui.modal_remove()
 
     # Track previous date values for inline date pickers (use dict, not reactive)
     _prev_date_values = {}

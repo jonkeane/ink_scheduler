@@ -151,6 +151,41 @@ input#year.form-control:focus {
     font-style: italic;
 }
 
+/* Theme editing UI */
+.theme-edit-btn,
+.theme-set-btn {
+    margin-left: 8px;
+    padding: 2px 8px;
+    font-size: 0.8em;
+    border: 1px solid #ccc;
+    background: white;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.theme-edit-btn:hover,
+.theme-set-btn:hover {
+    background: #f0f0f0;
+    border-color: #999;
+}
+
+.theme-edit-btn svg {
+    width: 14px;
+    height: 14px;
+    vertical-align: middle;
+}
+
+.theme-set-btn {
+    color: #666;
+}
+
+.modal-footer-buttons {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
 /* Calendar grid */
 .calendar-header {
     display: grid;
