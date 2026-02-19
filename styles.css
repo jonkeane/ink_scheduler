@@ -260,6 +260,43 @@ input#year.form-control:focus {
     opacity: 1;
 }
 
+/* Calendar save button */
+.calendar-save-btn {
+    position: absolute;
+    top: 28px;
+    right: 4px;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border-radius: 50%;
+    background-color: #999;
+    color: white;
+    border: none;
+    font-size: 0.7em;
+    line-height: 20px;
+    text-align: center;
+    opacity: 0;
+    transition: opacity 0.15s ease-in-out;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.calendar-cell-assigned:hover .calendar-save-btn {
+    opacity: 1;
+}
+.calendar-save-btn:hover {
+    background-color: #666;
+}
+.calendar-save-btn svg {
+    width: 12px;
+    height: 12px;
+}
+
+/* Shift swatch left to make room for buttons */
+.calendar-cell-assigned .calendar-cell-header {
+    padding-right: 10px;
+}
+
 /* List view */
 .list-header-row {
     display: flex;
@@ -352,6 +389,12 @@ input#year.form-control:focus {
     padding: 2px 8px;
 }
 
+/* Save button in list view */
+.list-save-btn {
+    margin-left: 10px;
+    padding: 2px 8px;
+}
+
 /* Ink collection view */
 .ink-collection-header {
     display: flex;
@@ -372,6 +415,10 @@ input#year.form-control:focus {
     margin-right: 10px;
     padding: 2px 8px;
 }
+.ink-collection-save-btn {
+    margin-right: 5px;
+    padding: 2px 8px;
+}
 .ink-collection-date-picker {
     width: 150px;
 }
@@ -379,4 +426,36 @@ input#year.form-control:focus {
     color: #666;
     font-size: 0.9em;
     margin-bottom: 10px;
+}
+
+/* Save confirmation modal */
+.save-conflict-warning {
+    padding: 10px;
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    border-radius: 4px;
+    margin-bottom: 15px;
+}
+.save-diff-table {
+    width: 100%;
+    margin-top: 10px;
+    border-collapse: collapse;
+}
+.save-diff-table th {
+    background: #f8f9fa;
+    padding: 8px;
+    text-align: left;
+    border-bottom: 1px solid #dee2e6;
+}
+.save-diff-table td {
+    padding: 8px;
+    border-bottom: 1px solid #dee2e6;
+}
+.save-diff-old {
+    color: #dc3545;
+    text-decoration: line-through;
+}
+.save-diff-new {
+    color: #28a745;
+    font-weight: 500;
 }

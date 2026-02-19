@@ -109,3 +109,76 @@ def flatten_ink_data(raw_ink: Dict) -> Dict:
         "comment": attrs.get("comment", ""),  # Public comment from API
         "private_comment": attrs.get("private_comment", ""),  # Private comment (where assignments go)
     }
+
+
+def fetch_single_ink(
+    api_token: str,
+    ink_id: str,
+    base_url: str = "https://www.fountainpencompanion.com/api/v1/collected_inks"
+) -> Dict:
+    """
+    Fetch a single ink by ID from the API.
+
+    Args:
+        api_token: Bearer token for authentication
+        ink_id: The ID of the ink to fetch
+        base_url: API endpoint URL
+
+    Returns:
+        Ink data dictionary (flattened)
+
+    Raises:
+        requests.HTTPError: If the API request fails
+    """
+    url = f"{base_url}/{ink_id}"
+    headers = {"Authorization": f"Bearer {api_token}"}
+
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+
+    response_data = response.json()
+    return flatten_ink_data(response_data.get("data", {}))
+
+
+def update_ink_private_comment(
+    api_token: str,
+    ink_id: str,
+    private_comment: str,
+    base_url: str = "https://www.fountainpencompanion.com/api/v1/collected_inks"
+) -> Dict:
+    """
+    Update the private_comment field for a specific ink.
+
+    Args:
+        api_token: Bearer token for authentication
+        ink_id: The ID of the ink to update
+        private_comment: The new private_comment value (JSON string)
+        base_url: API endpoint URL
+
+    Returns:
+        Updated ink data dictionary (flattened)
+
+    Raises:
+        requests.HTTPError: If the API request fails
+    """
+    url = f"{base_url}/{ink_id}"
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "data": {
+            "id": str(ink_id),
+            "type": "collected_ink",
+            "attributes": {
+                "private_comment": private_comment
+            }
+        }
+    }
+
+    response = requests.patch(url, headers=headers, json=payload)
+
+    response.raise_for_status()
+
+    response_data = response.json()
+    return flatten_ink_data(response_data.get("data", {}))

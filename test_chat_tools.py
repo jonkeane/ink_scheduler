@@ -77,7 +77,7 @@ def test_helper_functions():
     session_assignments = reactive.value({})  # New: session state
     api_assignments = reactive.value({})  # New: API state
 
-    tools = create_tool_functions(ink_data, selected_year, session_assignments, api_assignments)
+    tools, update_snapshot = create_tool_functions(ink_data, selected_year, session_assignments, api_assignments)
     print(f"Created {len(tools)} tool functions:")
     for tool in tools:
         print(f"  - {tool.__name__}")

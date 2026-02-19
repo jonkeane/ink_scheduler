@@ -1,9 +1,10 @@
 from shiny import App, ui, render, reactive
 from datetime import datetime
 import pandas as pd
-from calendar import monthrange
 import os
 import logging
+import json
+import traceback
 
 # Configure chatlas logging before importing chatlas-related modules
 os.environ["CHATLAS_LOG"] = "debug"
@@ -11,19 +12,33 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
+logging.getLogger("api_client").setLevel(logging.DEBUG)
 
 from dotenv import load_dotenv
 from assignment_logic import (
     create_explicit_assignments_only,
     get_month_summary,
-    parse_theme_from_comment,
     move_ink_assignment,
+    check_overwrite_conflict,
+    build_swatch_comment_json,
 )
-from api_client import fetch_all_collected_inks
-from llm_organizer import create_llm_chat, format_all_inks_for_llm
+from api_client import fetch_all_collected_inks, update_ink_private_comment, fetch_single_ink
 from ink_cache import save_inks_to_cache, load_inks_from_cache, get_cache_info
-from chat_tools import create_tool_functions
-import traceback
+from app_helpers import (
+    parse_session_data,
+    get_month_theme,
+    prepare_save_data,
+    prepare_post_save_updates,
+    get_month_dates,
+    make_button_id,
+    detect_new_click,
+)
+from views import (
+    render_calendar_view,
+    render_list_view,
+    render_ink_collection_view,
+)
+from chat_setup import initialize_chat_session
 
 # Load environment variables from .env file
 load_dotenv()
@@ -131,9 +146,6 @@ def ink_swatch_svg(color: str, size: str = "sm") -> ui.HTML:
     return ui.HTML(svg)
 
 def server(input, output, session):
-    # Reactive value for cache status
-    cache_status = reactive.Value("No cache loaded")
-    
     # Reactive value for current month (since we removed the input selector)
     current_month = reactive.Value(datetime.now().month)
     
@@ -191,25 +203,18 @@ def server(input, output, session):
     # Load default session on startup if it exists
     @reactive.Effect
     def load_default_session():
-        import json
         default_session_path = "session_default.json"
         if os.path.exists(default_session_path):
             try:
                 with open(default_session_path, "r") as f:
                     loaded = json.load(f)
-                # Support both old format (flat dict) and new format (with assignments/themes)
-                if "assignments" in loaded:
-                    # New format
-                    session_assignments.set(loaded.get("assignments", {}))
-                    session_themes.set(loaded.get("themes", {}))
-                    num_assignments = len(loaded.get("assignments", {}))
-                    num_themes = len(loaded.get("themes", {}))
-                    ui.notification_show(f"Loaded default session ({num_assignments} assignments, {num_themes} themes)", type="message", duration=3)
-                else:
-                    # Old format - flat dict of assignments
-                    session_assignments.set(loaded)
-                    session_themes.set({})
-                    ui.notification_show(f"Loaded default session ({len(loaded)} assignments)", type="message", duration=3)
+                assignments, themes = parse_session_data(loaded)
+                session_assignments.set(assignments)
+                session_themes.set(themes)
+                ui.notification_show(
+                    f"Loaded default session ({len(assignments)} assignments, {len(themes)} themes)",
+                    type="message", duration=3
+                )
             except Exception as e:
                 ui.notification_show(f"Error loading default session: {str(e)}", type="warning")
 
@@ -289,7 +294,6 @@ def server(input, output, session):
     # Save session as downloadable file
     @render.download(filename=lambda: f"session_{input.year()}.json")
     def save_session():
-        import json
         assignments = session_assignments.get()
         themes = session_themes.get()
         if not assignments and not themes:
@@ -306,7 +310,6 @@ def server(input, output, session):
     @reactive.Effect
     @reactive.event(input.load_session)
     def handle_load_session():
-        import json
         file_info = input.load_session()
         if not file_info:
             return
@@ -315,19 +318,13 @@ def server(input, output, session):
             file_path = file_info[0]["datapath"]
             with open(file_path, "r") as f:
                 loaded = json.load(f)
-            # Support both old format (flat dict) and new format (with assignments/themes)
-            if "assignments" in loaded:
-                # New format
-                session_assignments.set(loaded.get("assignments", {}))
-                session_themes.set(loaded.get("themes", {}))
-                num_assignments = len(loaded.get("assignments", {}))
-                num_themes = len(loaded.get("themes", {}))
-                ui.notification_show(f"Loaded {num_assignments} assignments, {num_themes} themes", type="message")
-            else:
-                # Old format - flat dict of assignments
-                session_assignments.set(loaded)
-                session_themes.set({})
-                ui.notification_show(f"Loaded {len(loaded)} assignments", type="message")
+            assignments, themes = parse_session_data(loaded)
+            session_assignments.set(assignments)
+            session_themes.set(themes)
+            ui.notification_show(
+                f"Loaded {len(assignments)} assignments, {len(themes)} themes",
+                type="message"
+            )
         except Exception as e:
             ui.notification_show(f"Error loading file: {str(e)}", type="error")
 
@@ -353,7 +350,14 @@ def server(input, output, session):
     def theme_label():
         year = input.year()
         month = current_month.get()
-        month_key = f"{year}-{month:02d}"
+
+        # Get theme using extracted business logic
+        theme_info = get_month_theme(
+            year, month,
+            session_themes.get(),
+            ink_data.get(),
+            get_daily_assignments()
+        )
 
         # Pencil icon SVG for edit button
         edit_icon = ui.HTML('''<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
@@ -362,61 +366,19 @@ def server(input, output, session):
             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
         </svg>''')
 
-        # Check session themes first
-        themes = session_themes.get()
-        if month_key in themes:
-            theme_data = themes[month_key]
-            theme_name = theme_data.get("theme", "")
-            theme_desc = theme_data.get("description", "")
-            if theme_name:
-                return ui.div(
-                    ui.span(
-                        ui.strong(theme_name, class_="theme-name"),
-                        ui.span(" — ", class_="theme-separator") if theme_desc else "",
-                        ui.span(theme_desc, class_="theme-description") if theme_desc else "",
-                        class_="theme-text"
-                    ),
-                    ui.input_action_button("edit_theme", edit_icon, class_="theme-edit-btn"),
-                    class_="theme-container"
-                )
-
-        # Fall back to checking API ink comments
-        inks = ink_data.get()
-        if not inks:
-            # No data yet - show "+ Theme" button
+        # No theme - show "+ Theme" button
+        if theme_info.source == "none":
             return ui.div(
                 ui.input_action_button("edit_theme", "+ Theme", class_="theme-set-btn"),
                 class_="theme-container"
             )
 
-        daily = get_daily_assignments()
-        first_day_str = f"{year}-{month:02d}-01"
-        first_day_ink_idx = daily.get(first_day_str)
-
-        if first_day_ink_idx is None or first_day_ink_idx >= len(inks):
-            # No theme from API - show "+ Theme" button
-            return ui.div(
-                ui.input_action_button("edit_theme", "+ Theme", class_="theme-set-btn"),
-                class_="theme-container"
-            )
-
-        first_day_ink = inks[first_day_ink_idx]
-        private_comment = first_day_ink.get("private_comment", "")
-        theme_info = parse_theme_from_comment(private_comment, year)
-
-        if not theme_info:
-            # No theme from API - show "+ Theme" button
-            return ui.div(
-                ui.input_action_button("edit_theme", "+ Theme", class_="theme-set-btn"),
-                class_="theme-container"
-            )
-
-        # API theme exists - show it with edit button
+        # Theme exists - show it with edit button
         return ui.div(
             ui.span(
-                ui.strong(theme_info["theme"], class_="theme-name"),
-                ui.span(" — ", class_="theme-separator"),
-                ui.span(theme_info["theme_description"], class_="theme-description"),
+                ui.strong(theme_info.theme, class_="theme-name"),
+                ui.span(" — ", class_="theme-separator") if theme_info.description else "",
+                ui.span(theme_info.description, class_="theme-description") if theme_info.description else "",
                 class_="theme-text"
             ),
             ui.input_action_button("edit_theme", edit_icon, class_="theme-edit-btn"),
@@ -506,17 +468,15 @@ def server(input, output, session):
         """Handle remove button clicks in list view."""
         year = input.year()
         month = current_month.get()
-        num_days = monthrange(year, month)[1]
 
-        for day in range(1, num_days + 1):
-            date_str = f"{year}-{month:02d}-{day:02d}"
-            button_id = f"remove_{date_str.replace('-', '_')}"
+        for date_str in get_month_dates(year, month):
+            button_id = make_button_id("remove", date_str)
 
             try:
                 current_clicks = getattr(input, button_id, lambda: 0)()
                 prev_clicks = _remove_button_clicks.get(button_id, 0)
 
-                if current_clicks > prev_clicks:
+                if detect_new_click(current_clicks, prev_clicks):
                     _remove_button_clicks[button_id] = current_clicks
                     new_session, result = move_ink_assignment(
                         session=session_assignments.get(),
@@ -532,6 +492,264 @@ def server(input, output, session):
             except:
                 pass
 
+    # Track button clicks for save buttons
+    _save_button_clicks = {}
+
+    # Reactive value for pending save (when confirmation is needed)
+    pending_save = reactive.Value(None)
+
+    @reactive.Effect
+    def observe_save_buttons():
+        """Handle save button clicks in calendar and list views."""
+        year = input.year()
+        month = current_month.get()
+
+        with reactive.isolate():
+            session = session_assignments.get()
+            api = api_assignments.get()
+            inks = ink_data.get()
+            themes = session_themes.get()
+
+        for date_str in get_month_dates(year, month):
+            # Only process session assignments (not API)
+            if date_str not in session or date_str in api:
+                continue
+
+            button_id = make_button_id("save", date_str)
+            try:
+                current_clicks = getattr(input, button_id, lambda: 0)()
+                prev_clicks = _save_button_clicks.get(button_id, 0)
+
+                if detect_new_click(current_clicks, prev_clicks):
+                    _save_button_clicks[button_id] = current_clicks
+                    ink_idx = session[date_str]
+                    handle_save_assignment(date_str, ink_idx, inks, year, themes)
+            except:
+                pass
+
+    # Track button clicks for ink collection save buttons
+    _ink_save_button_clicks = {}
+
+    @reactive.Effect
+    def observe_ink_save_buttons():
+        """Handle save button clicks in ink collection view."""
+        year = input.year()
+
+        with reactive.isolate():
+            session = session_assignments.get()
+            api = api_assignments.get()
+            inks = ink_data.get()
+            themes = session_themes.get()
+
+        # Build reverse lookup: ink_idx -> date_str
+        session_ink_to_date = {idx: date_str for date_str, idx in session.items() if date_str not in api}
+
+        for idx in range(len(inks)):
+            button_id = f"ink_save_{idx}"
+
+            # Only process if this ink has a session assignment
+            if idx not in session_ink_to_date:
+                continue
+
+            try:
+                current_clicks = getattr(input, button_id, lambda: 0)()
+                prev_clicks = _ink_save_button_clicks.get(button_id, 0)
+
+                if current_clicks > prev_clicks:
+                    _ink_save_button_clicks[button_id] = current_clicks
+                    date_str = session_ink_to_date[idx]
+                    handle_save_assignment(date_str, idx, inks, year, themes)
+            except:
+                pass
+
+    def handle_save_assignment(date_str: str, ink_idx: int, inks, year: int, themes):
+        """Handle saving a session assignment to API."""
+        try:
+            ink = inks[ink_idx]
+            ink_name = f"{ink.get('brand_name', '')} {ink.get('name', '')}"
+
+            # Get API token
+            try:
+                token = input.api_token()
+            except:
+                token = DEFAULT_API_TOKEN
+
+            if not token:
+                ui.notification_show("API token not found. Please set in Settings.", type="error")
+                return
+
+            # Fetch fresh data from API to check for conflicts
+            ui.notification_show("Checking for conflicts...", duration=2, type="message")
+            try:
+                fresh_ink = fetch_single_ink(token, ink["id"])
+                # Use fresh data for conflict check
+                ink_for_conflict_check = fresh_ink
+            except Exception as e:
+                # If fetch fails, fall back to cached data but warn user
+                ui.notification_show(f"Could not verify with API, using cached data: {str(e)}", type="warning", duration=3)
+                ink_for_conflict_check = ink
+
+            # Get theme for this month if exists
+            save_data = prepare_save_data(date_str, year, themes)
+            new_data = {
+                "date": save_data.date,
+                "theme": save_data.theme,
+                "theme_description": save_data.theme_description
+            }
+
+            # Check for conflicts using fresh API data
+            conflict = check_overwrite_conflict(ink_for_conflict_check, year)
+
+            if conflict:
+                # Show confirmation modal (pass fresh ink data for the save)
+                show_save_confirmation_modal(date_str, ink_idx, ink_name, conflict, new_data, ink_for_conflict_check, year)
+            else:
+                # No conflict, save immediately (use fresh ink data)
+                perform_save(date_str, ink_idx, ink_for_conflict_check, year, new_data)
+
+        except Exception as e:
+            ui.notification_show(f"Error preparing save: {str(e)}", type="error", duration=5)
+
+    def show_save_confirmation_modal(date_str: str, ink_idx: int, ink_name: str, conflict, new_data, ink, year: int):
+        """Show confirmation dialog when overwriting existing data."""
+        # Build comparison table
+        existing_date = conflict.get("existing_date", "(none)")
+        existing_theme = conflict.get("existing_theme") or "(none)"
+        new_theme = new_data.get("theme") or "(none)"
+
+        comparison = ui.div(
+            ui.div(
+                ui.strong("Warning: This will overwrite existing swatch data for this year"),
+                class_="save-conflict-warning"
+            ),
+            ui.tags.table(
+                ui.tags.thead(
+                    ui.tags.tr(
+                        ui.tags.th("Field"),
+                        ui.tags.th("Current"),
+                        ui.tags.th("New")
+                    )
+                ),
+                ui.tags.tbody(
+                    ui.tags.tr(
+                        ui.tags.td("Date"),
+                        ui.tags.td(existing_date, class_="save-diff-old"),
+                        ui.tags.td(new_data["date"], class_="save-diff-new")
+                    ),
+                    ui.tags.tr(
+                        ui.tags.td("Theme"),
+                        ui.tags.td(existing_theme, class_="save-diff-old"),
+                        ui.tags.td(new_theme, class_="save-diff-new")
+                    )
+                ),
+                class_="save-diff-table"
+            )
+        )
+
+        m = ui.modal(
+            ui.p(f"Save assignment for {ink_name}?"),
+            comparison,
+            title="Confirm Overwrite",
+            easy_close=True,
+            footer=ui.div(
+                ui.input_action_button("confirm_save", "Save", class_="btn-primary"),
+                ui.input_action_button("cancel_save", "Cancel", class_="btn-secondary"),
+                class_="modal-footer-buttons"
+            )
+        )
+        ui.modal_show(m)
+
+        # Store pending save info
+        pending_save.set({
+            "date_str": date_str,
+            "ink_idx": ink_idx,
+            "ink": ink,
+            "year": year,
+            "new_data": new_data
+        })
+
+    @reactive.Effect
+    @reactive.event(input.confirm_save)
+    def handle_confirm_save():
+        """Execute save after confirmation."""
+        save_info = pending_save.get()
+        if not save_info:
+            return
+
+        perform_save(
+            save_info["date_str"],
+            save_info["ink_idx"],
+            save_info["ink"],
+            save_info["year"],
+            save_info["new_data"]
+        )
+        ui.modal_remove()
+        pending_save.set(None)
+
+    @reactive.Effect
+    @reactive.event(input.cancel_save)
+    def handle_cancel_save():
+        """Cancel save operation."""
+        ui.modal_remove()
+        pending_save.set(None)
+
+    def perform_save(date_str: str, ink_idx: int, ink, year: int, new_data):
+        """Execute the actual API save operation."""
+        try:
+            # Show loading notification
+            ui.notification_show("Saving to API...", duration=None, id="save_loading", type="message")
+
+            # Build updated comment JSON
+            updated_comment = build_swatch_comment_json(
+                ink.get("private_comment", ""),
+                year,
+                new_data["date"],
+                new_data.get("theme"),
+                new_data.get("theme_description")
+            )
+
+            # Get API token
+            try:
+                token = input.api_token()
+            except:
+                token = DEFAULT_API_TOKEN
+
+            if not token:
+                ui.notification_remove("save_loading")
+                ui.notification_show("API token not found. Please set in Settings.", type="error")
+                return
+
+            # Call API
+            update_ink_private_comment(token, ink["id"], updated_comment)
+
+            # Prepare all state updates using extracted business logic
+            updates = prepare_post_save_updates(
+                ink_data.get(),
+                ink_idx,
+                updated_comment,
+                date_str,
+                year,
+                session_assignments.get()
+            )
+
+            # Apply state updates
+            ink_data.set(updates.updated_inks)
+            save_inks_to_cache(updates.updated_inks)
+            api_assignments.set(updates.new_api_assignments)
+            session_assignments.set(updates.new_session_assignments)
+
+            # Show success
+            ui.notification_remove("save_loading")
+            ink_name = f"{ink.get('brand_name', '')} {ink.get('name', '')}"
+            ui.notification_show(f"Saved {ink_name} to API!", type="message", duration=3)
+
+        except Exception as e:
+            ui.notification_remove("save_loading")
+            error_msg = str(e)
+            if hasattr(e, 'response'):
+                error_msg = f"{e.response.status_code}: {e.response.text[:100]}"
+            ui.notification_show(f"Error saving: {error_msg}", type="error", duration=7)
+
     # Track previous date values for ink collection date pickers
     _ink_collection_prev_dates = {}
 
@@ -544,24 +762,21 @@ def server(input, output, session):
         """Watch assign buttons and show ink picker modal when clicked."""
         year = input.year()
         month = current_month.get()
-        num_days = monthrange(year, month)[1]
 
         with reactive.isolate():
             daily = get_daily_assignments()
 
-        for day in range(1, num_days + 1):
-            date_str = f"{year}-{month:02d}-{day:02d}"
-            button_id = f"assign_{date_str.replace('-', '_')}"
-
+        for date_str in get_month_dates(year, month):
             # Skip assigned days
             if date_str in daily:
                 continue
 
+            button_id = make_button_id("assign", date_str)
             try:
                 current_clicks = getattr(input, button_id, lambda: 0)()
                 prev_clicks = _assign_button_clicks.get(button_id, 0)
 
-                if current_clicks > prev_clicks:
+                if detect_new_click(current_clicks, prev_clicks):
                     _assign_button_clicks[button_id] = current_clicks
                     # Show ink picker modal for this date
                     ink_picker_date.set(date_str)
@@ -747,7 +962,6 @@ def server(input, output, session):
         """Set up observers for inline date pickers."""
         year = input.year()
         month = current_month.get()
-        num_days = monthrange(year, month)[1]
 
         # Use isolate to read without creating dependency (prevents infinite loop)
         with reactive.isolate():
@@ -756,9 +970,8 @@ def server(input, output, session):
 
         # PHASE 1: Read ALL date inputs to establish reactive dependencies
         input_values = {}
-        for day in range(1, num_days + 1):
-            date_str = f"{year}-{month:02d}-{day:02d}"
-            date_input_id = f"date_{date_str.replace('-', '_')}"
+        for date_str in get_month_dates(year, month):
+            date_input_id = make_button_id("date", date_str)
             try:
                 # Read the input to create reactive dependency
                 val = getattr(input, date_input_id, lambda: None)()
@@ -932,302 +1145,46 @@ def server(input, output, session):
         else:
             return calendar_view()
     
-    # Calendar view
+    # Calendar view - delegates to views.py
     def calendar_view():
-        inks = ink_data.get()
-        if not inks:
-            return ui.p("No inks loaded. Please fetch your collection first.")
-
-        daily = get_daily_assignments()
-        year = input.year()
-        month = current_month.get()  # Use reactive value instead of input
-
-        num_days = monthrange(year, month)[1]
-        first_weekday = datetime(year, month, 1).weekday()
-
-        # Build calendar grid
-        weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-
-        # Header row
-        header = ui.div(
-            *[ui.div(day, class_="calendar-weekday")
-              for day in weekdays],
-            class_="calendar-header"
+        return render_calendar_view(
+            inks=ink_data.get(),
+            daily_assignments=get_daily_assignments(),
+            session_assignments=session_assignments.get(),
+            api_assignments=api_assignments.get(),
+            year=input.year(),
+            month=current_month.get(),
+            ink_swatch_fn=ink_swatch_svg
         )
-        
-        # Calendar days - use actual empty divs for grid cells before first day
-        cells = [ui.div(class_="calendar-cell-empty") for _ in range(first_weekday)]
-        
-        for day in range(1, num_days + 1):
-            date_str = f"{year}-{month:02d}-{day:02d}"
-            ink_idx = daily.get(date_str)
-            
-            if ink_idx is not None and ink_idx < len(inks):
-                ink = inks[ink_idx]
-                ink_name = ink.get("name", "Unknown")
-                brand = ink.get("brand_name", "")
-                ink_color = ink.get("color", "#cccccc")
-
-                # Can delete if it's a session assignment (not from API)
-                api = api_assignments.get()
-                session = session_assignments.get()
-                can_delete = date_str in session and date_str not in api
-
-                # Build cell content with optional remove button
-                cell_components = [
-                    ui.div(
-                        ui.strong(str(day), class_="calendar-day-number"),
-                        ui.div(ink_swatch_svg(ink_color, "lg")),
-                        class_="calendar-cell-header"
-                    ),
-                    ui.span(brand, class_="calendar-brand"),
-                    ui.span(ink_name, class_="calendar-ink-name")
-                ]
-
-                # Build the main content div
-                main_content = ui.div(
-                    *cell_components,
-                    class_="calendar-cell-content"
-                )
-
-                # Build the cell with optional remove button overlay
-                if can_delete:
-                    remove_btn = ui.input_action_button(
-                        f"remove_{date_str.replace('-', '_')}",
-                        "✕",
-                        class_="btn-sm calendar-remove-btn"
-                    )
-                    cell_content = ui.div(
-                        remove_btn,
-                        main_content,
-                        class_="calendar-cell-assigned"
-                    )
-                else:
-                    cell_content = ui.div(
-                        main_content,
-                        class_="calendar-cell-assigned"
-                    )
-            else:
-                cell_content = ui.div(
-                    ui.strong(str(day)),
-                    class_="calendar-cell"
-                )
-            
-            cells.append(cell_content)
-        
-        # Fill remaining cells with empty divs
-        while len(cells) % 7 != 0:
-            cells.append(ui.div(class_="calendar-cell-empty"))
-        
-        calendar_grid = ui.div(
-            *cells,
-            class_="calendar-grid"
-        )
-
-        return ui.div(header, calendar_grid)
     
-    # List view
+    # List view - delegates to views.py
     def list_view():
-        inks = ink_data.get()
-        if not inks:
-            return ui.p("No inks loaded. Please fetch your collection first.")
-
-        daily = get_daily_assignments()
-        year = input.year()
-        month = current_month.get()  # Use reactive value instead of input
-        api = api_assignments.get()
-        session = session_assignments.get()
-
-        # Table header
-        header_row = ui.div(
-            ui.div("Date", class_="list-col-date"),
-            ui.div("Color", class_="list-col-color"),
-            ui.div("Brand", class_="list-col-brand"),
-            ui.div("Name", class_="list-col-name"),
-            ui.div("Actions", class_="list-col-actions"),
-            class_="list-header-row"
+        return render_list_view(
+            inks=ink_data.get(),
+            daily_assignments=get_daily_assignments(),
+            session_assignments=session_assignments.get(),
+            api_assignments=api_assignments.get(),
+            year=input.year(),
+            month=current_month.get(),
+            ink_swatch_fn=ink_swatch_svg
         )
 
-        rows = []
-        num_days = monthrange(year, month)[1]
-
-        for day in range(1, num_days + 1):
-            date_str = f"{year}-{month:02d}-{day:02d}"
-            date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-            ink_idx = daily.get(date_str)
-
-            # Date column
-            date_col = ui.div(
-                ui.strong(date_obj.strftime("%a, %b %d")),
-                class_="list-date-col"
-            )
-
-            if ink_idx is not None and ink_idx < len(inks):
-                ink = inks[ink_idx]
-                color = ink.get("color", "#888888")
-                brand = ink.get("brand_name", "Unknown")
-                name = ink.get("name", "Unknown")
-
-                # Can edit if it's a session assignment (not from API)
-                can_edit = date_str in session and date_str not in api
-                is_api = date_str in api
-
-                # Ink swatch (small)
-                swatch = ink_swatch_svg(color, "sm")
-
-                # Brand and name columns
-                brand_col = ui.div(brand, class_="list-brand-col")
-                name_col = ui.div(name, class_="list-name-col")
-
-                # Actions column
-                if can_edit:
-                    action_components = [
-                        ui.div(ui.input_date(f"date_{date_str.replace('-', '_')}", "", value=date_obj.date()), class_="calendar-icon-picker"),
-                        ui.input_action_button(
-                            f"remove_{date_str.replace('-', '_')}",
-                            "Remove",
-                            class_="btn-sm btn-outline-danger list-remove-btn"
-                        )
-                    ]
-                    action_col = ui.div(*action_components, class_="list-actions-col")
-                elif is_api:
-                    action_col = ui.div(
-                        ui.span(date_obj.strftime("%b %d, %Y"), class_="api-date-display"),
-                        ui.span("swatched", class_="api-badge"),
-                        class_="list-actions-col"
-                    )
-                else:
-                    action_col = ui.div()
-
-                row = ui.div(
-                    date_col,
-                    ui.div(swatch, class_="list-swatch-col"),
-                    brand_col,
-                    name_col,
-                    action_col,
-                    class_="list-row"
-                )
-            else:
-                # Unassigned day - with ink bottle icon to assign
-                ink_bottle_svg = ui.HTML('''<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M10 2h4v2h-4z"/>
-                    <path d="M8 4h8l1 4H7l1-4z"/>
-                    <path d="M7 8h10v12a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V8z"/>
-                    <path d="M9 13h6v5H9z" fill="#666" opacity="0.3"/>
-                </svg>''')
-
-                assign_button = ui.input_action_button(
-                    f"assign_{date_str.replace('-', '_')}",
-                    ink_bottle_svg,
-                    class_="ink-assign-btn",
-                    title="Assign ink to this date"
-                )
-
-                row = ui.div(
-                    date_col,
-                    ui.div(class_="list-swatch-col"),
-                    ui.div(class_="list-brand-col"),
-                    ui.div(
-                        ui.span("Unassigned", class_="list-unassigned-text"),
-                        class_="list-unassigned-name-col"
-                    ),
-                    ui.div(assign_button, class_="list-actions-col"),
-                    class_="list-row-unassigned"
-                )
-
-            rows.append(row)
-
-        list_content = ui.div(*rows, class_="list-content")
-
-        return ui.div(header_row, list_content)
-
-    # Ink collection view with search and inline assignment
+    # Ink collection view - delegates to views.py
     @output
     @render.ui
     def ink_collection_view():
-        inks = ink_data.get()
-        if not inks:
-            return ui.p("No inks loaded. Please fetch your collection first.")
-
-        daily = get_daily_assignments()
-        api = api_assignments.get()
         # Explicit dependency to ensure re-render on session changes
         _ = session_assignments.get()
 
-        # Build reverse lookup: ink_idx -> date_str
-        ink_to_date = {idx: date_str for date_str, idx in daily.items()}
-
-        # Get search filter
-        search_term = input.ink_search().lower().strip() if input.ink_search() else ""
-
-        # Table header
-        header_row = ui.div(
-            ui.div("Color", class_="list-col-color"),
-            ui.div("Brand", class_="list-col-brand"),
-            ui.div("Name", class_="list-col-name"),
-            ui.div("Assignment", class_="list-col-actions"),
-            class_="ink-collection-header"
+        return render_ink_collection_view(
+            inks=ink_data.get(),
+            daily_assignments=get_daily_assignments(),
+            session_assignments=session_assignments.get(),
+            api_assignments=api_assignments.get(),
+            year=input.year(),
+            search_query=input.ink_search() or "",
+            ink_swatch_fn=ink_swatch_svg
         )
-
-        rows = []
-        for idx, ink in enumerate(inks):
-            brand = ink.get("brand_name", "Unknown")
-            name = ink.get("name", "Unknown")
-            color = ink.get("color", "#888888")
-
-            # Apply search filter
-            if search_term and search_term not in brand.lower() and search_term not in name.lower():
-                continue
-
-            assigned_date = ink_to_date.get(idx)
-
-            # Ink swatch (small)
-            swatch = ink_swatch_svg(color, "sm")
-
-            # Brand and name columns
-            brand_col = ui.div(brand, class_="ink-collection-brand-col")
-            name_col = ui.div(name, class_="list-name-col")
-
-            # Assignment column
-            is_api = assigned_date and assigned_date in api
-            is_session = assigned_date and not is_api
-
-            if is_api:
-                # API assignment - read only
-                date_obj = datetime.strptime(assigned_date, "%Y-%m-%d")
-                assign_col = ui.div(
-                    ui.span(date_obj.strftime("%b %d, %Y"), class_="api-date-display"),
-                    ui.span("swatched", class_="api-badge"),
-                    class_="ink-collection-assign-col"
-                )
-            else:
-                # Editable - date picker for both session and unassigned
-                date_value = datetime.strptime(assigned_date, "%Y-%m-%d").date() if assigned_date else ""
-                components = []
-                if is_session:
-                    components.append(ui.input_action_button(
-                        f"ink_remove_{idx}",
-                        "Remove",
-                        class_="btn-sm btn-outline-danger ink-collection-remove-btn"
-                    ))
-                components.append(ui.div(ui.input_date(f"ink_date_{idx}", "", value=date_value), class_="ink-collection-date-picker"))
-                assign_col = ui.div(*components, class_="ink-collection-assign-col")
-
-            row = ui.div(
-                ui.div(swatch, class_="list-swatch-col"),
-                brand_col,
-                name_col,
-                assign_col,
-                class_="list-row"
-            )
-            rows.append(row)
-
-        count_text = f"Showing {len(rows)} of {len(inks)} inks" if search_term else f"{len(inks)} inks"
-        count_display = ui.div(count_text, class_="ink-collection-count")
-
-        list_content = ui.div(*rows, class_="list-content")
-
-        return ui.div(count_display, header_row, list_content)
     
     # Month assignment table
     @output
@@ -1265,79 +1222,22 @@ def server(input, output, session):
         if not inks:
             return None
 
+        # Get provider from settings (with default fallback)
         try:
-            # Get provider from settings (with default fallback)
-            try:
-                provider = input.llm_provider()
-            except:
-                provider = "openai"  # Fallback to default if not set
-            
-            # Create chat instance
-            year = selected_year.get()
-            system_message = f"""You are an expert fountain pen ink curator helping organize a collection of {len(inks)} inks for the year {year}.
+            provider = input.llm_provider()
+        except:
+            provider = "openai"
 
-When analyzing an ink collection, consider:
-- Color families and harmonies
-- Ink brands, lines of inks
-- Seasonal appropriateness (e.g., warm colors in fall, pastels in spring, holidays)
-- Ink properties (shimmer, sheen, special effects)
-- User preferences and stated requirements
-- Variety and balance across the year
-
-You have access to tools that let you browse, search, assign, and remove ink assignments.
-You can also set themes for months using set_month_theme() - always set a theme after filling a month with inks!
-
-HOLISTIC THEME PLANNING (CRITICAL):
-Before proposing any theme, you MUST evaluate whether it can fill the entire month:
-1. First, search for inks that would match the theme using search_inks() or find_available_inks_for_theme()
-2. Count how many matching inks are available vs. how many days need filling
-3. A month typically has 28-31 days. A theme with only 4-5 matching inks is NOT viable on its own.
-
-If a theme cannot fill the month:
-- DO NOT propose it as a standalone theme
-- Instead, propose a COMBINED theme (e.g., "Blues & Teals" or "Shimmer & Sheen Inks" or "Winter Cool Tones")
-- Or broaden the criteria (e.g., instead of "Navy Blue" suggest "Blue Family")
-- Or suggest two complementary themes that together fill the month (e.g., "Week 1-2: Warm Reds, Week 3-4: Deep Burgundies")
-- You also cannot repeat an ink throughout the year. In fact, the tool calls are set up to make that impossible. If you don't have enough inks for a month, you will need to try harder.
-
-NEVER leave a month partially filled. Every day should have an ink assigned. If the user requests a narrow theme that can't fill the month, explain the coverage gap and propose alternatives that achieve full coverage.
-
-TWO-TIER STATE MANAGEMENT:
-- API Assignments: Loaded from the user's saved data. These are PROTECTED and cannot be modified.
-- Session Assignments: Your experimental assignments. These can be freely modified but are not auto-saved.
-
-PROTECTION RULES:
-- Dates with API assignments are protected - you cannot assign or unassign them
-- Session assignments can be freely added or removed
-- The user must explicitly save the session to persist your changes
-
-PROACTIVE GAP FILLING:
-When you move or reassign inks from one month to another, this often creates gaps (empty slots) in the source month. Be proactive about filling these:
-1. After moving inks out of a month, check if it now has unassigned days using get_month_assignments()
-2. If there are gaps, use find_available_inks_for_theme() to find inks that could fill them
-3. This tool returns both unassigned inks AND session-assigned inks that could be reshuffled
-4. Suggest backfilling with inks that match the month's existing theme, or propose adjusting the theme
-5. Don't wait for the user to notice empty slots - anticipate and offer to fill them
-6. It may take a few rounds of shuffling to optimize the schedule, and that's fine
-7. Consider whether moving a session-assigned ink from another month would create a better overall arrangement
-
-
-Help the user organize their inks by suggesting themes, using tools to make assignments, and being flexible based on feedback."""
-
-            chat_obj = create_llm_chat(provider, system_prompt=system_message)
-
-            # Register tools with session/api assignment state
-            tool_functions, snapshot_updater = create_tool_functions(
-                ink_data, selected_year, session_assignments, api_assignments, session_themes
-            )
-            for tool_func in tool_functions:
-                chat_obj.register_tool(tool_func)
-
-            return chat_obj, snapshot_updater
-
-        except Exception as e:
-            print(f"Chat initialization error: {traceback.format_exc()}")
-            return None
+        return initialize_chat_session(
+            inks=inks,
+            year=selected_year.get(),
+            provider=provider,
+            ink_data_reactive=ink_data,
+            selected_year_reactive=selected_year,
+            session_assignments_reactive=session_assignments,
+            api_assignments_reactive=api_assignments,
+            session_themes_reactive=session_themes
+        )
 
     # Handle chat messages
     @chat.on_user_submit

@@ -46,7 +46,7 @@ api_assignments = MockReactive({})  # API assignments (protected/read-only)
 from chat_tools import create_tool_functions
 
 # Create tools
-tools = create_tool_functions(ink_data, selected_year, session_assignments, api_assignments)
+tools, update_snapshot = create_tool_functions(ink_data, selected_year, session_assignments, api_assignments)
 
 # Create chat
 chat = ChatOpenAI()

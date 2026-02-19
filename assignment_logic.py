@@ -94,6 +94,79 @@ def parse_theme_from_comment(comment: str, year: int) -> Optional[Dict[str, str]
     return None
 
 
+def check_overwrite_conflict(ink: Dict, year: int) -> Optional[Dict]:
+    """
+    Check if saving would overwrite existing swatch data for this year.
+
+    Args:
+        ink: Ink dictionary with 'private_comment' field
+        year: Year to check (e.g., 2026)
+
+    Returns:
+        None if no conflict (safe to save), or dict with conflict details:
+        {
+            "existing_date": str,
+            "existing_theme": str or None,
+            "existing_theme_description": str or None
+        }
+    """
+    existing_swatch = get_swatch_data(ink.get("private_comment"), year)
+    if not existing_swatch:
+        return None
+
+    existing_date = existing_swatch.get("date")
+    if not existing_date:
+        return None
+
+    return {
+        "existing_date": existing_date,
+        "existing_theme": existing_swatch.get("theme"),
+        "existing_theme_description": existing_swatch.get("theme_description")
+    }
+
+
+def build_swatch_comment_json(
+    existing_comment: Optional[str],
+    year: int,
+    date: str,
+    theme: Optional[str] = None,
+    theme_description: Optional[str] = None
+) -> str:
+    """
+    Build updated private_comment JSON, preserving existing data.
+
+    Merges new swatch data for the specified year with any existing
+    private_comment data (other years, other fields).
+
+    Args:
+        existing_comment: Current private_comment value (may be None or invalid JSON)
+        year: Year for the swatch key (e.g., 2026 -> "swatch2026")
+        date: Date string in YYYY-MM-DD format
+        theme: Optional theme name
+        theme_description: Optional theme description
+
+    Returns:
+        JSON string with merged data
+    """
+    # Parse existing comment, defaulting to empty dict
+    data = parse_comment_json(existing_comment)
+
+    # Build new swatch data
+    swatch_key = f"swatch{year}"
+    swatch_data = {"date": date}
+
+    # Only include theme fields if they have values
+    if theme:
+        swatch_data["theme"] = theme
+    if theme_description:
+        swatch_data["theme_description"] = theme_description
+
+    # Update the swatch data for this year
+    data[swatch_key] = swatch_data
+
+    return json.dumps(data)
+
+
 def create_explicit_assignments_only(inks: List[Dict], year: int) -> Dict[str, int]:
     """
     Create assignments only for inks with explicit date assignments in private_comment.

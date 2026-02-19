@@ -2,6 +2,7 @@
 Tests for ink assignment logic
 """
 import pytest
+import json
 from assignment_logic import (
     parse_swatch_date_from_comment,
     get_month_summary,
@@ -14,6 +15,8 @@ from assignment_logic import (
     create_explicit_assignments_only,
     move_ink_assignment,
     MoveResult,
+    check_overwrite_conflict,
+    build_swatch_comment_json,
 )
 
 
@@ -568,6 +571,103 @@ class TestMoveInkAssignmentMove:
         assert result.success is True
         assert new_session == {"2026-01-20": 0}  # ink 0 moved, ink 5 displaced
         assert result.data.get("displaced_ink_idx") == 5
+
+
+class TestCheckOverwriteConflict:
+    """Tests for check_overwrite_conflict function"""
+
+    def test_no_conflict_empty_comment(self):
+        """Test no conflict when ink has no private_comment"""
+        ink = {"private_comment": ""}
+        result = check_overwrite_conflict(ink, 2026)
+        assert result is None
+
+    def test_no_conflict_no_swatch_data(self):
+        """Test no conflict when ink has comment but no swatch data"""
+        ink = {"private_comment": '{"notes": "Great ink!"}'}
+        result = check_overwrite_conflict(ink, 2026)
+        assert result is None
+
+    def test_no_conflict_different_year(self):
+        """Test no conflict when ink has swatch data for different year"""
+        ink = {"private_comment": '{"swatch2025": {"date": "2025-05-15"}}'}
+        result = check_overwrite_conflict(ink, 2026)
+        assert result is None
+
+    def test_conflict_detected(self):
+        """Test conflict detected when ink has swatch data for same year"""
+        ink = {"private_comment": '{"swatch2026": {"date": "2026-01-15", "theme": "Winter"}}'}
+        result = check_overwrite_conflict(ink, 2026)
+        assert result is not None
+        assert result["existing_date"] == "2026-01-15"
+        assert result["existing_theme"] == "Winter"
+
+    def test_conflict_no_theme(self):
+        """Test conflict detected returns None for missing theme"""
+        ink = {"private_comment": '{"swatch2026": {"date": "2026-01-15"}}'}
+        result = check_overwrite_conflict(ink, 2026)
+        assert result is not None
+        assert result["existing_date"] == "2026-01-15"
+        assert result["existing_theme"] is None
+
+
+class TestBuildSwatchCommentJson:
+    """Tests for build_swatch_comment_json function"""
+
+    def test_build_from_empty(self):
+        """Test building swatch JSON from empty comment"""
+        result = build_swatch_comment_json("", 2026, "2026-01-15")
+        data = json.loads(result)
+        assert data["swatch2026"]["date"] == "2026-01-15"
+        assert "theme" not in data["swatch2026"]
+
+    def test_build_with_theme(self):
+        """Test building swatch JSON with theme"""
+        result = build_swatch_comment_json("", 2026, "2026-01-15", "Winter Blues", "Cool tones")
+        data = json.loads(result)
+        assert data["swatch2026"]["date"] == "2026-01-15"
+        assert data["swatch2026"]["theme"] == "Winter Blues"
+        assert data["swatch2026"]["theme_description"] == "Cool tones"
+
+    def test_preserve_other_years(self):
+        """Test that other years' swatch data is preserved"""
+        existing = '{"swatch2025": {"date": "2025-05-15", "theme": "Spring"}}'
+        result = build_swatch_comment_json(existing, 2026, "2026-01-15")
+        data = json.loads(result)
+        # New year added
+        assert data["swatch2026"]["date"] == "2026-01-15"
+        # Old year preserved
+        assert data["swatch2025"]["date"] == "2025-05-15"
+        assert data["swatch2025"]["theme"] == "Spring"
+
+    def test_preserve_other_fields(self):
+        """Test that non-swatch fields are preserved"""
+        existing = '{"notes": "Great ink!", "rating": 5}'
+        result = build_swatch_comment_json(existing, 2026, "2026-01-15")
+        data = json.loads(result)
+        assert data["swatch2026"]["date"] == "2026-01-15"
+        assert data["notes"] == "Great ink!"
+        assert data["rating"] == 5
+
+    def test_overwrite_same_year(self):
+        """Test that same year swatch data is overwritten"""
+        existing = '{"swatch2026": {"date": "2026-01-01", "theme": "Old Theme"}}'
+        result = build_swatch_comment_json(existing, 2026, "2026-02-15", "New Theme")
+        data = json.loads(result)
+        assert data["swatch2026"]["date"] == "2026-02-15"
+        assert data["swatch2026"]["theme"] == "New Theme"
+
+    def test_invalid_existing_json(self):
+        """Test handling of invalid existing JSON"""
+        result = build_swatch_comment_json("not valid json", 2026, "2026-01-15")
+        data = json.loads(result)
+        assert data["swatch2026"]["date"] == "2026-01-15"
+
+    def test_none_existing_comment(self):
+        """Test handling of None existing comment"""
+        result = build_swatch_comment_json(None, 2026, "2026-01-15")
+        data = json.loads(result)
+        assert data["swatch2026"]["date"] == "2026-01-15"
 
 
 if __name__ == "__main__":
