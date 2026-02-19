@@ -480,3 +480,85 @@ input#year.form-control:focus {
     background-color: #ffebee !important;
     border: 2px dashed #dc3545 !important;
 }
+
+/* Ink picker modal */
+.ink-picker-subtitle {
+    margin-bottom: 10px;
+    color: #666;
+}
+
+.ink-picker-list {
+    max-height: 350px;
+    overflow-y: auto;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    margin-top: 10px;
+}
+
+.ink-picker-item {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #eee;
+    transition: background-color 0.15s;
+}
+
+.ink-picker-item:last-child {
+    border-bottom: none;
+}
+
+.ink-picker-item:hover,
+.ink-picker-item:focus {
+    background-color: #e3f2fd;
+    outline: none;
+}
+
+.ink-picker-item.ink-picker-selected {
+    background-color: #bbdefb;
+}
+
+.ink-picker-item-assigned {
+    background-color: #fff8e1;
+}
+
+.ink-picker-item-assigned:hover,
+.ink-picker-item-assigned:focus {
+    background-color: #ffecb3;
+}
+
+.ink-picker-swatch {
+    flex-shrink: 0;
+    margin-right: 12px;
+}
+
+.ink-picker-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.ink-picker-brand {
+    font-size: 0.8em;
+    color: #666;
+}
+
+.ink-picker-name {
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ink-picker-date-label {
+    font-size: 0.75em;
+    color: #f57c00;
+    font-style: italic;
+    margin-top: 2px;
+}
+
+.ink-picker-no-results {
+    padding: 20px;
+    text-align: center;
+    color: #999;
+}

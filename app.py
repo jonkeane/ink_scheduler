@@ -786,46 +786,144 @@ def server(input, output, session):
             except Exception:
                 pass
 
-    # Track modal state - "ready" becomes True after seeing empty placeholder
-    _modal_state = {"ready": False}
+    # Reactive value for ink picker search
+    ink_picker_search = reactive.Value("")
 
     def show_ink_picker_modal(date_str):
         """Show the ink picker modal for a specific date."""
-        # Mark not ready until we see empty placeholder (avoids stale values)
-        _modal_state["ready"] = False
-
-        inks = ink_data.get()
-        daily = get_daily_assignments()
-        assigned_indices = set(daily.values())
-
-        # Build choices for unassigned inks only
-        unassigned_inks = {"": "Select an ink..."} | {
-            str(i): f"{ink.get('brand_name', 'Unknown')} - {ink.get('name', 'Unknown')}"
-            for i, ink in enumerate(inks)
-            if i not in assigned_indices
-        }
+        # Reset search when opening modal
+        ink_picker_search.set("")
 
         date_obj = datetime.strptime(date_str, "%Y-%m-%d")
         date_display = date_obj.strftime("%B %d, %Y")
 
         m = ui.modal(
-            ui.p(f"Assign ink to {date_display}:"),
-            ui.input_selectize(
-                "modal_ink_select",
+            ui.p(f"Assign ink to {date_display}:", class_="ink-picker-subtitle"),
+            ui.input_text(
+                "ink_picker_search_input",
                 None,
-                choices=unassigned_inks,
-                selected="",
+                placeholder="Search inks...",
                 width="100%"
             ),
+            ui.output_ui("ink_picker_list"),
+            ui.tags.script("""
+                // Focus search input when modal opens
+                setTimeout(function() {
+                    var searchInput = document.getElementById('ink_picker_search_input');
+                    if (searchInput) searchInput.focus();
+                }, 100);
+            """),
             title="Assign Ink",
             easy_close=True,
             footer=None,
-            size="s"
+            size="m"
         )
         ui.modal_show(m)
 
-    # Handler for modal ink selection - auto-assign on selection
+    # Update search reactive value when input changes
     @reactive.Effect
+    def sync_ink_picker_search():
+        try:
+            search_val = input.ink_picker_search_input()
+            ink_picker_search.set(search_val or "")
+        except Exception:
+            pass
+
+    # Render the filtered ink list for the picker modal
+    @output
+    @render.ui
+    def ink_picker_list():
+        date_str = ink_picker_date.get()
+        if not date_str:
+            return ui.div()
+
+        inks = ink_data.get()
+        if not inks:
+            return ui.p("No inks loaded.")
+
+        session = session_assignments.get()
+        api = api_assignments.get()
+        search_query = ink_picker_search.get().lower()
+
+        # Build list of inks to show:
+        # 1. Unassigned inks
+        # 2. Session-assigned inks (with date label)
+        # API-assigned inks are excluded (can't reassign them)
+        ink_items = []
+
+        # Get all assignments
+        daily = get_daily_assignments()
+        assigned_indices = set(daily.values())
+
+        # Reverse lookup for session assignments: ink_idx -> date
+        session_ink_to_date = {}
+        for d, idx in session.items():
+            if d not in api:  # Only session assignments, not API
+                session_ink_to_date[idx] = d
+
+        for idx, ink in enumerate(inks):
+            brand = ink.get("brand_name", "Unknown")
+            name = ink.get("name", "Unknown")
+            color = ink.get("color", "#888888")
+
+            # Filter by search query
+            if search_query and search_query not in brand.lower() and search_query not in name.lower():
+                continue
+
+            # Check if this ink is assigned
+            is_session_assigned = idx in session_ink_to_date
+            is_api_assigned = idx in assigned_indices and not is_session_assigned
+
+            # Skip API-assigned inks (they can't be moved)
+            if is_api_assigned:
+                continue
+
+            # Build the item
+            session_date = session_ink_to_date.get(idx)
+            if session_date:
+                date_obj = datetime.strptime(session_date, "%Y-%m-%d")
+                date_label = ui.span(
+                    f"(assigned to {date_obj.strftime('%b %d')})",
+                    class_="ink-picker-date-label"
+                )
+            else:
+                date_label = None
+
+            item = ui.div(
+                ui.div(
+                    ink_swatch_svg(color, "sm"),
+                    class_="ink-picker-swatch"
+                ),
+                ui.div(
+                    ui.span(brand, class_="ink-picker-brand"),
+                    ui.span(name, class_="ink-picker-name"),
+                    date_label if date_label else "",
+                    class_="ink-picker-info"
+                ),
+                class_="ink-picker-item" + (" ink-picker-item-assigned" if session_date else ""),
+                tabindex="0",
+                **{
+                    "data-ink-idx": str(idx),
+                    "data-ink-name": f"{brand} {name}"
+                }
+            )
+            ink_items.append(item)
+
+        if not ink_items:
+            return ui.div(
+                ui.p("No inks match your search.", class_="ink-picker-no-results"),
+                class_="ink-picker-list"
+            )
+
+        return ui.div(
+            *ink_items,
+            class_="ink-picker-list",
+            id="ink-picker-list-container"
+        )
+
+    # Handler for modal ink selection via click or keyboard
+    @reactive.Effect
+    @reactive.event(input.ink_picker_select)
     def handle_modal_ink_selection():
         """Auto-assign ink when selection is made in modal."""
         date_str = ink_picker_date.get()
@@ -833,37 +931,23 @@ def server(input, output, session):
             return
 
         try:
-            current_val = input.modal_ink_select()
+            ink_idx = int(input.ink_picker_select()["ink_idx"])
         except Exception:
             return
 
-        # Wait until we see the empty placeholder value before accepting selections
-        # This ensures we don't process stale values from a previous modal
-        if not current_val:
-            _modal_state["ready"] = True
-            return
-
-        # Only process if modal is ready (has seen empty value first)
-        if not _modal_state["ready"]:
-            return
-
-        try:
-            ink_idx = int(current_val)
-        except ValueError:
-            return
-
-        # Mark not ready to prevent double-processing
-        _modal_state["ready"] = False
-
-        # Use unified move function (assign = from_date=None)
+        # Use unified move function
         session = session_assignments.get()
         api = api_assignments.get()
         inks = ink_data.get()
 
+        # Check if this ink is already session-assigned (moving it)
+        session_ink_to_date = {idx: d for d, idx in session.items() if d not in api}
+        from_date = session_ink_to_date.get(ink_idx)
+
         new_session, result = move_ink_assignment(
             session=session,
             api=api,
-            from_date=None,
+            from_date=from_date,
             to_date=date_str,
             ink_idx=ink_idx,
             inks=inks
@@ -875,11 +959,26 @@ def server(input, output, session):
 
         session_assignments.set(new_session)
         ink_name = result.data.get("ink_name", "ink")
-        ui.notification_show(f"Assigned {ink_name}", type="message", duration=2)
+        action = "Moved" if from_date else "Assigned"
+        ui.notification_show(f"{action} {ink_name}", type="message", duration=2)
 
         # Close the modal and reset state
         ui.modal_remove()
         ink_picker_date.set(None)
+
+    # Handler for clicking empty calendar cells
+    @reactive.Effect
+    @reactive.event(input.calendar_empty_cell_click)
+    def handle_empty_cell_click():
+        """Show ink picker when empty calendar cell is clicked."""
+        click_data = input.calendar_empty_cell_click()
+        if not click_data:
+            return
+
+        date_str = click_data.get("date")
+        if date_str:
+            ink_picker_date.set(date_str)
+            show_ink_picker_modal(date_str)
 
     # Drag-and-drop handler for calendar
     @reactive.Effect
