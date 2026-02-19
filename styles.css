@@ -459,3 +459,24 @@ input#year.form-control:focus {
     color: #28a745;
     font-weight: 500;
 }
+
+/* Drag-and-drop styles */
+.calendar-draggable {
+    cursor: grab;
+}
+.calendar-draggable:active {
+    cursor: grabbing;
+}
+.calendar-draggable.dragging {
+    opacity: 0.5;
+    border: 2px dashed #007bff;
+}
+.calendar-drop-target.drag-over {
+    background-color: #e3f2fd !important;
+    border: 2px dashed #007bff !important;
+    box-shadow: inset 0 0 10px rgba(0, 123, 255, 0.2);
+}
+.calendar-drop-target[data-protected="true"].drag-over {
+    background-color: #ffebee !important;
+    border: 2px dashed #dc3545 !important;
+}

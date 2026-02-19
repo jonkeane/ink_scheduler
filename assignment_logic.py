@@ -508,3 +508,83 @@ def move_ink_assignment(
     )
 
 
+def swap_ink_assignments(
+    session: Dict[str, int],
+    api: Dict[str, int],
+    date1: str,
+    date2: str,
+    inks: Optional[List[Dict]] = None
+) -> tuple:
+    """
+    Swap ink assignments between two dates.
+
+    This handles the case where you drag an ink onto another assigned date,
+    and both inks should swap positions.
+
+    Args:
+        session: Current session assignments {date_str: ink_idx}
+        api: API assignments {date_str: ink_idx} (read-only, for protection checks)
+        date1: First date (source of drag)
+        date2: Second date (drop target)
+        inks: Optional ink list for including ink info in result
+
+    Returns:
+        (new_session, MoveResult) tuple
+    """
+    # Validate date formats
+    for date_str, label in [(date1, "date1"), (date2, "date2")]:
+        try:
+            datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            return session, MoveResult(False, f"Invalid {label} format: {date_str}. Use YYYY-MM-DD.")
+
+    # Check if either date is API-protected
+    if date1 in api:
+        return session, MoveResult(
+            False,
+            f"Date {date1} has a protected API assignment and cannot be modified.",
+            protected=True, date=date1
+        )
+    if date2 in api:
+        return session, MoveResult(
+            False,
+            f"Date {date2} has a protected API assignment and cannot be modified.",
+            protected=True, date=date2
+        )
+
+    # Get ink indices from session
+    merged = {**session, **api}
+    ink_idx1 = merged.get(date1)
+    ink_idx2 = merged.get(date2)
+
+    if ink_idx1 is None:
+        return session, MoveResult(False, f"No assignment found for {date1}")
+    if ink_idx2 is None:
+        return session, MoveResult(False, f"No assignment found for {date2}")
+
+    # Get ink info for both
+    ink_info = {}
+    if inks:
+        if 0 <= ink_idx1 < len(inks):
+            ink1 = inks[ink_idx1]
+            ink_info["ink1_idx"] = ink_idx1
+            ink_info["ink1_brand"] = ink1.get("brand_name", "Unknown")
+            ink_info["ink1_name"] = ink1.get("name", "Unknown")
+        if 0 <= ink_idx2 < len(inks):
+            ink2 = inks[ink_idx2]
+            ink_info["ink2_idx"] = ink_idx2
+            ink_info["ink2_brand"] = ink2.get("brand_name", "Unknown")
+            ink_info["ink2_name"] = ink2.get("name", "Unknown")
+
+    # Perform swap
+    new_session = session.copy()
+    new_session[date1] = ink_idx2
+    new_session[date2] = ink_idx1
+
+    return new_session, MoveResult(
+        True,
+        f"Swapped inks between {date1} and {date2}",
+        operation="swap", date1=date1, date2=date2, **ink_info
+    )
+
+

@@ -82,14 +82,16 @@ def render_calendar_view(
         if ink_idx is not None and ink_idx < len(inks):
             ink = inks[ink_idx]
             cell_content = _render_calendar_cell_with_ink(
-                date_str, day, ink,
+                date_str, day, ink, ink_idx,
                 session_assignments, api_assignments,
                 ink_swatch_fn
             )
         else:
+            # Empty cell - can be a drop target
             cell_content = ui.div(
                 ui.strong(str(day)),
-                class_="calendar-cell"
+                class_="calendar-cell calendar-drop-target",
+                **{"data-date": date_str}
             )
 
         cells.append(cell_content)
@@ -107,6 +109,7 @@ def _render_calendar_cell_with_ink(
     date_str: str,
     day: int,
     ink: dict,
+    ink_idx: int,
     session_assignments: dict,
     api_assignments: dict,
     ink_swatch_fn
@@ -116,7 +119,8 @@ def _render_calendar_cell_with_ink(
     brand = ink.get("brand_name", "")
     ink_color = ink.get("color", "#cccccc")
 
-    can_delete = date_str in session_assignments and date_str not in api_assignments
+    is_session = date_str in session_assignments and date_str not in api_assignments
+    is_protected = date_str in api_assignments
 
     cell_components = [
         ui.div(
@@ -130,7 +134,20 @@ def _render_calendar_cell_with_ink(
 
     main_content = ui.div(*cell_components, class_="calendar-cell-content")
 
-    if can_delete:
+    # Build data attributes for drag-and-drop
+    data_attrs = {
+        "data-date": date_str,
+        "data-ink-idx": str(ink_idx),
+    }
+    if is_protected:
+        data_attrs["data-protected"] = "true"
+
+    # Determine CSS classes
+    css_classes = "calendar-cell-assigned calendar-drop-target"
+    if is_session:
+        css_classes += " calendar-draggable"
+
+    if is_session:
         save_icon = ui.HTML(SAVE_ICON_SVG)
         save_btn = ui.input_action_button(
             make_button_id("save", date_str),
@@ -146,10 +163,16 @@ def _render_calendar_cell_with_ink(
             save_btn,
             remove_btn,
             main_content,
-            class_="calendar-cell-assigned"
+            class_=css_classes,
+            draggable="true",
+            **data_attrs
         )
     else:
-        return ui.div(main_content, class_="calendar-cell-assigned")
+        return ui.div(
+            main_content,
+            class_=css_classes,
+            **data_attrs
+        )
 
 
 # =============================================================================

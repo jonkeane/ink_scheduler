@@ -19,6 +19,7 @@ from assignment_logic import (
     create_explicit_assignments_only,
     get_month_summary,
     move_ink_assignment,
+    swap_ink_assignments,
     check_overwrite_conflict,
     build_swatch_comment_json,
 )
@@ -48,6 +49,7 @@ DEFAULT_API_TOKEN = os.getenv("FPC_API_TOKEN", "")
 
 app_ui = ui.page_fluid(
     ui.include_css("styles.css"),
+    ui.include_js("calendar_drag.js"),
 
     ui.layout_sidebar(
         ui.sidebar(
@@ -878,6 +880,51 @@ def server(input, output, session):
         # Close the modal and reset state
         ui.modal_remove()
         ink_picker_date.set(None)
+
+    # Drag-and-drop handler for calendar
+    @reactive.Effect
+    @reactive.event(input.calendar_drag_drop)
+    def handle_calendar_drag_drop():
+        """Handle drag-and-drop events from the calendar."""
+        drag_data = input.calendar_drag_drop()
+        if not drag_data:
+            return
+
+        from_date = drag_data.get("from_date")
+        to_date = drag_data.get("to_date")
+        is_swap = drag_data.get("is_swap", False)
+
+        if not from_date or not to_date:
+            return
+
+        session = session_assignments.get()
+        api = api_assignments.get()
+        inks = ink_data.get()
+
+        if is_swap:
+            # Target already has an ink - perform swap
+            new_session, result = swap_ink_assignments(
+                session=session,
+                api=api,
+                date1=from_date,
+                date2=to_date,
+                inks=inks
+            )
+        else:
+            # Target is empty - simple move
+            new_session, result = move_ink_assignment(
+                session=session,
+                api=api,
+                from_date=from_date,
+                to_date=to_date,
+                inks=inks
+            )
+
+        if result.success:
+            session_assignments.set(new_session)
+            ui.notification_show(result.message, type="message", duration=2)
+        else:
+            ui.notification_show(result.message, type="warning", duration=3)
 
     # Theme editor modal handlers
     @reactive.Effect

@@ -14,6 +14,7 @@ from assignment_logic import (
     parse_theme_from_comment,
     create_explicit_assignments_only,
     move_ink_assignment,
+    swap_ink_assignments,
     MoveResult,
     check_overwrite_conflict,
     build_swatch_comment_json,
@@ -668,6 +669,110 @@ class TestBuildSwatchCommentJson:
         result = build_swatch_comment_json(None, 2026, "2026-01-15")
         data = json.loads(result)
         assert data["swatch2026"]["date"] == "2026-01-15"
+
+
+# =============================================================================
+# Tests for swap_ink_assignments
+# =============================================================================
+
+class TestSwapInkAssignments:
+    """Tests for swap_ink_assignments function (drag-and-drop swap)"""
+
+    def test_swap_success(self):
+        """Test successful swap between two session assignments"""
+        session = {"2026-01-15": 0, "2026-01-20": 1}
+        api = {}
+        new_session, result = swap_ink_assignments(session, api, "2026-01-15", "2026-01-20")
+        assert result.success is True
+        assert new_session == {"2026-01-15": 1, "2026-01-20": 0}
+        assert result.data["operation"] == "swap"
+
+    def test_swap_invalid_date1_format(self):
+        """Test swap fails with invalid date1 format"""
+        session = {"bad-date": 0, "2026-01-20": 1}
+        api = {}
+        new_session, result = swap_ink_assignments(session, api, "bad-date", "2026-01-20")
+        assert result.success is False
+        assert "Invalid date1 format" in result.message
+        assert new_session == session
+
+    def test_swap_invalid_date2_format(self):
+        """Test swap fails with invalid date2 format"""
+        session = {"2026-01-15": 0, "bad-date": 1}
+        api = {}
+        new_session, result = swap_ink_assignments(session, api, "2026-01-15", "bad-date")
+        assert result.success is False
+        assert "Invalid date2 format" in result.message
+        assert new_session == session
+
+    def test_swap_date1_api_protected(self):
+        """Test swap fails when date1 is API-protected"""
+        session = {"2026-01-20": 1}
+        api = {"2026-01-15": 0}
+        new_session, result = swap_ink_assignments(session, api, "2026-01-15", "2026-01-20")
+        assert result.success is False
+        assert "protected" in result.message.lower()
+        assert result.data.get("protected") is True
+
+    def test_swap_date2_api_protected(self):
+        """Test swap fails when date2 is API-protected"""
+        session = {"2026-01-15": 0}
+        api = {"2026-01-20": 1}
+        new_session, result = swap_ink_assignments(session, api, "2026-01-15", "2026-01-20")
+        assert result.success is False
+        assert "protected" in result.message.lower()
+        assert result.data.get("protected") is True
+
+    def test_swap_date1_no_assignment(self):
+        """Test swap fails when date1 has no assignment"""
+        session = {"2026-01-20": 1}
+        api = {}
+        new_session, result = swap_ink_assignments(session, api, "2026-01-15", "2026-01-20")
+        assert result.success is False
+        assert "No assignment found for 2026-01-15" in result.message
+
+    def test_swap_date2_no_assignment(self):
+        """Test swap fails when date2 has no assignment"""
+        session = {"2026-01-15": 0}
+        api = {}
+        new_session, result = swap_ink_assignments(session, api, "2026-01-15", "2026-01-20")
+        assert result.success is False
+        assert "No assignment found for 2026-01-20" in result.message
+
+    def test_swap_with_ink_info(self):
+        """Test swap includes ink info when inks provided"""
+        session = {"2026-01-15": 0, "2026-01-20": 1}
+        api = {}
+        inks = [
+            {"brand_name": "Diamine", "name": "Blue Velvet"},
+            {"brand_name": "Pilot", "name": "Iroshizuku"}
+        ]
+        new_session, result = swap_ink_assignments(session, api, "2026-01-15", "2026-01-20", inks=inks)
+        assert result.success is True
+        assert result.data.get("ink1_brand") == "Diamine"
+        assert result.data.get("ink1_name") == "Blue Velvet"
+        assert result.data.get("ink2_brand") == "Pilot"
+        assert result.data.get("ink2_name") == "Iroshizuku"
+
+    def test_swap_preserves_other_assignments(self):
+        """Test swap doesn't affect other assignments"""
+        session = {"2026-01-15": 0, "2026-01-20": 1, "2026-01-25": 2}
+        api = {}
+        new_session, result = swap_ink_assignments(session, api, "2026-01-15", "2026-01-20")
+        assert result.success is True
+        assert new_session["2026-01-25"] == 2  # unchanged
+        assert new_session["2026-01-15"] == 1  # swapped
+        assert new_session["2026-01-20"] == 0  # swapped
+
+    def test_swap_does_not_mutate_original(self):
+        """Test swap returns new dict and doesn't mutate original"""
+        session = {"2026-01-15": 0, "2026-01-20": 1}
+        api = {}
+        original_session = session.copy()
+        new_session, result = swap_ink_assignments(session, api, "2026-01-15", "2026-01-20")
+        assert result.success is True
+        assert session == original_session  # original unchanged
+        assert new_session is not session  # new dict returned
 
 
 if __name__ == "__main__":
