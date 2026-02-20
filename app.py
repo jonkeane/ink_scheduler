@@ -22,6 +22,7 @@ from assignment_logic import (
     swap_ink_assignments,
     check_overwrite_conflict,
     build_swatch_comment_json,
+    remove_swatch_from_comment,
 )
 from api_client import fetch_all_collected_inks, update_ink_private_comment, fetch_single_ink
 from ink_cache import save_inks_to_cache, load_inks_from_cache, get_cache_info
@@ -78,6 +79,7 @@ app_ui = ui.page_fluid(
                     ),
                     ui.input_action_button("next_month", "→", class_="btn-secondary btn-sm"),
                     ui.output_ui("theme_label"),
+                    ui.output_ui("save_all_month_btn"),
                     class_="nav-controls"
                 ),
                 ui.output_ui("main_view")
@@ -387,6 +389,139 @@ def server(input, output, session):
             class_="theme-container"
         )
 
+    # Save All Month button - only shows when there are unsaved session assignments for this month
+    @output
+    @render.ui
+    def save_all_month_btn():
+        year = input.year()
+        month = current_month.get()
+
+        session = session_assignments.get()
+        api = api_assignments.get()
+
+        # Count unsaved session assignments for this month
+        month_prefix = f"{year}-{month:02d}"
+        unsaved_count = sum(
+            1 for date_str in session
+            if date_str.startswith(month_prefix) and date_str not in api
+        )
+
+        if unsaved_count == 0:
+            return ui.span()  # Return empty span when nothing to save
+
+        # Save icon SVG
+        save_icon = ui.HTML('''<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+             fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+            <polyline points="17 21 17 13 7 13 7 21"/>
+            <polyline points="7 3 7 8 15 8"/>
+        </svg>''')
+
+        return ui.input_action_button(
+            "save_all_month",
+            ui.span(save_icon, f" Save All ({unsaved_count})"),
+            class_="btn-primary btn-sm save-all-month-btn"
+        )
+
+    # Handle Save All Month button click
+    @reactive.Effect
+    @reactive.event(input.save_all_month)
+    async def handle_save_all_month():
+        year = input.year()
+        month = current_month.get()
+
+        session = session_assignments.get()
+        api = api_assignments.get()
+        inks = ink_data.get()
+        themes = session_themes.get()
+
+        # Get API token
+        try:
+            token = input.api_token()
+        except Exception:
+            token = DEFAULT_API_TOKEN
+
+        if not token:
+            ui.notification_show("API token not found. Please set in Settings.", type="error")
+            return
+
+        # Find all unsaved session assignments for this month
+        month_prefix = f"{year}-{month:02d}"
+        to_save = [
+            (date_str, session[date_str])
+            for date_str in sorted(session.keys())
+            if date_str.startswith(month_prefix) and date_str not in api
+        ]
+
+        if not to_save:
+            ui.notification_show("No unsaved assignments for this month", type="warning")
+            return
+
+        ui.notification_show(f"Saving {len(to_save)} assignments...", duration=None, id="bulk_save_loading")
+
+        saved_count = 0
+        error_count = 0
+
+        for date_str, ink_idx in to_save:
+            try:
+                ink = inks[ink_idx]
+
+                # Fetch fresh data from API
+                try:
+                    fresh_ink = fetch_single_ink(token, ink["id"])
+                except Exception:
+                    fresh_ink = ink
+
+                # Get save data
+                save_data = prepare_save_data(date_str, year, themes)
+                new_data = {
+                    "date": save_data.date,
+                    "theme": save_data.theme,
+                    "theme_description": save_data.theme_description
+                }
+
+                # Build updated comment JSON
+                updated_comment = build_swatch_comment_json(
+                    fresh_ink.get("private_comment", ""),
+                    year,
+                    new_data["date"],
+                    new_data.get("theme"),
+                    new_data.get("theme_description")
+                )
+
+                # Call API
+                update_ink_private_comment(token, fresh_ink["id"], updated_comment)
+
+                # Prepare state updates
+                updates = prepare_post_save_updates(
+                    ink_data.get(),
+                    ink_idx,
+                    updated_comment,
+                    date_str,
+                    year,
+                    session_assignments.get()
+                )
+
+                # Apply state updates
+                ink_data.set(updates.updated_inks)
+                save_inks_to_cache(updates.updated_inks)
+                api_assignments.set(updates.new_api_assignments)
+                session_assignments.set(updates.new_session_assignments)
+
+                saved_count += 1
+
+            except Exception as e:
+                error_count += 1
+                ink_name = f"{inks[ink_idx].get('brand_name', '')} {inks[ink_idx].get('name', '')}"
+                ui.notification_show(f"Error saving {ink_name}: {str(e)}", type="error", duration=5)
+
+        ui.notification_remove("bulk_save_loading")
+
+        if error_count == 0:
+            ui.notification_show(f"Successfully saved all {saved_count} assignments!", type="message", duration=3)
+        else:
+            ui.notification_show(f"Saved {saved_count} of {len(to_save)} assignments ({error_count} errors)", type="warning", duration=5)
+
     # Navigate to previous month
     @reactive.Effect
     @reactive.event(input.prev_month)
@@ -500,6 +635,9 @@ def server(input, output, session):
     # Reactive value for pending save (when confirmation is needed)
     pending_save = reactive.Value(None)
 
+    # Reactive value for pending API delete (when confirmation is needed)
+    pending_api_delete = reactive.Value(None)
+
     @reactive.Effect
     def observe_save_buttons():
         """Handle save button clicks in calendar and list views."""
@@ -581,7 +719,6 @@ def server(input, output, session):
                 return
 
             # Fetch fresh data from API to check for conflicts
-            ui.notification_show("Checking for conflicts...", duration=2, type="message")
             try:
                 fresh_ink = fetch_single_ink(token, ink["id"])
                 # Use fresh data for conflict check
@@ -694,6 +831,180 @@ def server(input, output, session):
         """Cancel save operation."""
         ui.modal_remove()
         pending_save.set(None)
+
+    # Track button clicks for API delete buttons (list view)
+    _api_delete_button_clicks = {}
+
+    @reactive.Effect
+    def observe_api_delete_buttons():
+        """Handle API delete button clicks in list view."""
+        year = input.year()
+        month = current_month.get()
+
+        inks = ink_data.get()
+        if not inks:
+            return
+
+        with reactive.isolate():
+            api = api_assignments.get()
+
+        for date_str in get_month_dates(year, month):
+            # Only process API assignments
+            if date_str not in api:
+                continue
+
+            button_id = make_button_id("api_delete", date_str)
+
+            try:
+                current_clicks = getattr(input, button_id, lambda: 0)()
+                prev_clicks = _api_delete_button_clicks.get(button_id, 0)
+
+                if current_clicks > prev_clicks:
+                    _api_delete_button_clicks[button_id] = current_clicks
+                    ink_idx = api[date_str]
+                    ink = inks[ink_idx]
+                    show_api_delete_confirmation_modal(date_str, ink_idx, ink)
+            except:
+                pass
+
+    def show_api_delete_confirmation_modal(date_str: str, ink_idx: int, ink: dict):
+        """Show confirmation dialog before deleting an API assignment."""
+        ink_name = f"{ink.get('brand_name', '')} {ink.get('name', '')}"
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+        date_display = date_obj.strftime("%B %d, %Y")
+        year = date_obj.year
+
+        warning_content = ui.div(
+            ui.div(
+                ui.strong("Warning: This will change data on FPC!"),
+                class_="api-delete-warning"
+            ),
+            ui.p("You are about to remove the swatch assignment for:"),
+            ui.div(
+                ui.tags.table(
+                    ui.tags.tbody(
+                        ui.tags.tr(
+                            ui.tags.td("Ink:", class_="api-delete-label"),
+                            ui.tags.td(ink_name, class_="api-delete-value")
+                        ),
+                        ui.tags.tr(
+                            ui.tags.td("Date:", class_="api-delete-label"),
+                            ui.tags.td(date_display, class_="api-delete-value")
+                        ),
+                        ui.tags.tr(
+                            ui.tags.td("Year:", class_="api-delete-label"),
+                            ui.tags.td(str(year), class_="api-delete-value")
+                        )
+                    ),
+                    class_="api-delete-table"
+                ),
+                class_="api-delete-details"
+            ),
+            ui.p(
+                "This will remove the swatch date from the ink's data in the API. ",
+                class_="api-delete-explanation"
+            )
+        )
+
+        m = ui.modal(
+            warning_content,
+            title="Delete API Assignment?",
+            easy_close=True,
+            footer=ui.div(
+                ui.input_action_button("cancel_api_delete", "Cancel", class_="btn-secondary"),
+                ui.input_action_button("confirm_api_delete", "Remove", class_="btn-danger"),
+                class_="modal-footer-buttons"
+            )
+        )
+        ui.modal_show(m)
+
+        # Store pending delete info
+        pending_api_delete.set({
+            "date_str": date_str,
+            "ink_idx": ink_idx,
+            "ink": ink,
+            "year": year
+        })
+
+    @reactive.Effect
+    @reactive.event(input.confirm_api_delete)
+    def handle_confirm_api_delete():
+        """Execute API delete after confirmation."""
+        delete_info = pending_api_delete.get()
+        if not delete_info:
+            return
+
+        perform_api_delete(
+            delete_info["date_str"],
+            delete_info["ink_idx"],
+            delete_info["ink"],
+            delete_info["year"]
+        )
+        ui.modal_remove()
+        pending_api_delete.set(None)
+
+    @reactive.Effect
+    @reactive.event(input.cancel_api_delete)
+    def handle_cancel_api_delete():
+        """Cancel API delete operation."""
+        ui.modal_remove()
+        pending_api_delete.set(None)
+
+    def perform_api_delete(date_str: str, ink_idx: int, ink: dict, year: int):
+        """Execute the actual API delete operation."""
+        try:
+            ink_name = f"{ink.get('brand_name', '')} {ink.get('name', '')}"
+
+            # Get API token
+            try:
+                token = input.api_token()
+            except:
+                token = DEFAULT_API_TOKEN
+
+            if not token:
+                ui.notification_show("API token not found. Please set in Settings.", type="error")
+                return
+
+            # Show loading notification
+            ui.notification_show("Deleting from API...", duration=None, id="delete_loading", type="message")
+
+            # Fetch fresh data from API
+            try:
+                fresh_ink = fetch_single_ink(token, ink["id"])
+            except Exception as e:
+                ui.notification_remove("delete_loading")
+                ui.notification_show(f"Could not fetch ink data: {str(e)}", type="error")
+                return
+
+            # Build updated comment JSON with swatch data removed
+            updated_comment = remove_swatch_from_comment(
+                fresh_ink.get("private_comment", ""),
+                year
+            )
+
+            # Call API to update
+            update_ink_private_comment(token, fresh_ink["id"], updated_comment)
+
+            # Update local ink data
+            inks = ink_data.get().copy()
+            inks[ink_idx] = {**inks[ink_idx], "private_comment": updated_comment}
+            ink_data.set(inks)
+            save_inks_to_cache(inks)
+
+            # Rebuild API assignments from updated ink data
+            new_api = create_explicit_assignments_only(inks, year)
+            api_assignments.set(new_api)
+
+            # Show success
+            ui.notification_remove("delete_loading")
+            ui.notification_show(f"Deleted assignment for {ink_name}", type="message", duration=3)
+
+        except Exception as e:
+            ui.notification_remove("delete_loading")
+            error_msg = str(e)
+            if hasattr(e, 'response'):
+                error_msg = f"{e.response.status_code}: {e.response.text[:100]}"
+            ui.notification_show(f"Error deleting: {error_msg}", type="error", duration=7)
 
     def perform_save(date_str: str, ink_idx: int, ink, year: int, new_data):
         """Execute the actual API save operation."""

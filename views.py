@@ -28,6 +28,14 @@ INK_BOTTLE_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="20" height="2
     <path d="M9 13h6v5H9z" fill="#666" opacity="0.3"/>
 </svg>'''
 
+# Trash icon for deleting API assignments (distinct from session remove)
+TRASH_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="3 6 5 6 21 6"/>
+    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+    <line x1="10" y1="11" x2="10" y2="17"/>
+    <line x1="14" y1="11" x2="14" y2="17"/>
+</svg>'''
+
 
 # =============================================================================
 # Calendar View
@@ -286,9 +294,16 @@ def _render_list_row_with_ink(
         ]
         action_col = ui.div(*action_components, class_="list-actions-col")
     elif is_api:
+        trash_icon = ui.HTML(TRASH_ICON_SVG)
         action_col = ui.div(
             ui.span(date_obj.strftime("%b %d, %Y"), class_="api-date-display"),
             ui.span("swatched", class_="api-badge"),
+            ui.input_action_button(
+                make_button_id("api_delete", date_str),
+                trash_icon,
+                class_="btn-sm btn-outline-danger list-api-delete-btn",
+                title="Delete API assignment"
+            ),
             class_="list-actions-col"
         )
     else:

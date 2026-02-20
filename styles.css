@@ -180,6 +180,18 @@ input#year.form-control:focus {
     color: #666;
 }
 
+/* Save All Month button */
+.save-all-month-btn {
+    margin-left: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.save-all-month-btn svg {
+    vertical-align: middle;
+}
+
 .modal-footer-buttons {
     display: flex;
     gap: 8px;
@@ -561,4 +573,54 @@ input#year.form-control:focus {
     padding: 20px;
     text-align: center;
     color: #999;
+}
+
+/* API delete button in list view */
+.list-api-delete-btn {
+    margin-left: 10px;
+    padding: 2px 6px;
+}
+
+.list-api-delete-btn svg {
+    vertical-align: middle;
+}
+
+/* API delete confirmation modal */
+.api-delete-warning {
+    padding: 10px 15px;
+    background: #f8d7da;
+    border: 1px solid #f5c6cb;
+    border-radius: 4px;
+    color: #721c24;
+    margin-bottom: 15px;
+}
+
+.api-delete-details {
+    margin: 15px 0;
+}
+
+.api-delete-table {
+    width: 100%;
+}
+
+.api-delete-table td {
+    padding: 6px 10px;
+}
+
+.api-delete-label {
+    font-weight: 600;
+    color: #555;
+    width: 60px;
+}
+
+.api-delete-value {
+    color: #333;
+}
+
+.api-delete-explanation {
+    color: #666;
+    font-size: 0.9em;
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid #eee;
 }

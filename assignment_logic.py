@@ -167,6 +167,31 @@ def build_swatch_comment_json(
     return json.dumps(data)
 
 
+def remove_swatch_from_comment(existing_comment: Optional[str], year: int) -> str:
+    """
+    Remove swatch data for a specific year from private_comment JSON.
+
+    Preserves all other data in the comment (other years, other fields).
+
+    Args:
+        existing_comment: Current private_comment value (may be None or invalid JSON)
+        year: Year to remove (e.g., 2026 -> removes "swatch2026")
+
+    Returns:
+        JSON string with swatch data removed, or empty object "{}" if nothing remains
+    """
+    # Parse existing comment, defaulting to empty dict
+    data = parse_comment_json(existing_comment)
+
+    # Remove the swatch key for this year
+    swatch_key = f"swatch{year}"
+    if swatch_key in data:
+        del data[swatch_key]
+
+    # Return updated JSON (could be empty object if that was the only data)
+    return json.dumps(data) if data else "{}"
+
+
 def create_explicit_assignments_only(inks: List[Dict], year: int) -> Dict[str, int]:
     """
     Create assignments only for inks with explicit date assignments in private_comment.
