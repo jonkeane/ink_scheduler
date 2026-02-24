@@ -407,37 +407,125 @@ input#year.form-control:focus {
     padding: 2px 8px;
 }
 
-/* Ink collection view */
-.ink-collection-header {
+/* Ink collection view - table layout */
+.ink-collection-table {
+    width: 100%;
+}
+.ink-header-row {
     display: flex;
-    padding: 10px 15px;
+    padding: 8px 15px;
     background: #e9ecef;
     border-bottom: 2px solid #dee2e6;
+    font-weight: bold;
 }
-.ink-collection-brand-col {
-    width: 150px;
+.ink-table-content {
+    max-height: 600px;
+    overflow-y: auto;
+}
+.ink-row {
+    display: flex;
+    align-items: center;
+    padding: 6px 15px;
+    border-bottom: 1px solid #eee;
+}
+.ink-row:hover {
+    background: #f8f9fa;
+}
+.ink-row-session {
+    background: #fff8e1;
+}
+.ink-row-session:hover {
+    background: #ffecb3;
+}
+.ink-row-api {
+    background: #e8f5e9;
+}
+.ink-row-api:hover {
+    background: #c8e6c9;
+}
+
+/* Ink collection header columns */
+.ink-col-color {
+    width: 50px;
+}
+.ink-col-brand {
+    width: 160px;
+}
+.ink-col-name {
+    flex: 1;
+    min-width: 120px;
+}
+.ink-col-actions {
+    width: 140px;
+    text-align: center;
+}
+.ink-col-date {
+    width: 130px;
+    text-align: right;
+}
+
+/* Ink collection data columns */
+.ink-swatch-col {
+    width: 50px;
+    flex-shrink: 0;
+}
+.ink-brand-col {
+    width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #666;
+    font-size: 0.9em;
+}
+.ink-name-col {
+    flex: 1;
+    min-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.ink-name-text {
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.ink-collection-assign-col {
+.ink-actions-col {
+    width: 140px;
     display: flex;
     align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    flex-shrink: 0;
 }
-.ink-collection-remove-btn {
-    margin-right: 10px;
-    padding: 2px 8px;
+.ink-date-col {
+    width: 130px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-shrink: 0;
 }
-.ink-collection-save-btn {
-    margin-right: 5px;
-    padding: 2px 8px;
+.ink-date-col .shiny-date-input {
+    width: 120px;
 }
-.ink-collection-date-picker {
-    width: 150px;
-}
-.ink-collection-count {
-    color: #666;
+.ink-date-display {
+    color: #555;
     font-size: 0.9em;
-    margin-bottom: 10px;
+}
+
+/* Action buttons - consistent styling */
+.ink-action-btn {
+    padding: 4px 10px;
+}
+.ink-action-btn svg {
+    vertical-align: middle;
+}
+.ink-no-results {
+    padding: 20px;
+    text-align: center;
+    color: #999;
 }
 
 /* Save confirmation modal */

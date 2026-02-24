@@ -6,6 +6,9 @@ import logging
 import json
 import traceback
 
+# Increase websocket ping timeout to prevent disconnects during long LLM operations
+os.environ["SHINY_WEBSOCKET_PING_TIMEOUT"] = "480"
+
 # Configure chatlas logging before importing chatlas-related modules
 os.environ["CHATLAS_LOG"] = "debug"
 logging.basicConfig(
@@ -41,12 +44,34 @@ from views import (
     render_ink_collection_view,
 )
 from chat_setup import initialize_chat_session
+from llm_organizer import list_available_models, DEFAULT_MODELS
 
 # Load environment variables from .env file
 load_dotenv()
 
 # Get API token from environment (if available)
 DEFAULT_API_TOKEN = os.getenv("FPC_API_TOKEN", "")
+
+# Settings file for persisting preferences
+SETTINGS_FILE = "app_settings.json"
+
+def load_settings() -> dict:
+    """Load settings from file."""
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def save_settings(settings: dict):
+    """Save settings to file."""
+    try:
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(settings, f, indent=2)
+    except Exception as e:
+        print(f"Error saving settings: {e}")
 
 app_ui = ui.page_fluid(
     ui.include_css("styles.css"),
@@ -156,18 +181,34 @@ def server(input, output, session):
     # Create Shiny chat interface (must be inside server function)
     chat = ui.Chat(id="ink_chat", messages=[])
     
+    # Load saved settings
+    saved_settings = load_settings()
+    initial_provider = saved_settings.get("provider", "anthropic")
+    initial_model = saved_settings.get("model", DEFAULT_MODELS.get(initial_provider, [""])[0])
+
+    # Reactive value for available models (fetched from API)
+    available_models = reactive.Value(DEFAULT_MODELS.get(initial_provider, []))
+    selected_provider = reactive.Value(initial_provider)
+    selected_model = reactive.Value(initial_model)
+
     # Show settings modal when button is clicked
     @reactive.Effect
     @reactive.event(input.open_settings)
     def show_settings():
+        # Fetch models for current provider when opening settings
+        provider = selected_provider.get()
+        models = list_available_models(provider)
+        available_models.set(models)
+
         m = ui.modal(
             ui.input_password("api_token", "API Token",
                             value=DEFAULT_API_TOKEN,
                             placeholder="Enter your API token"),
             ui.hr(),
             ui.input_select("llm_provider", "LLM Provider",
-                          choices=["openai", "anthropic", "google"],
-                          selected="openai"),
+                          choices=["anthropic", "openai"],
+                          selected=provider),
+            ui.output_ui("model_selector"),
             ui.input_password("llm_api_key", "LLM API Key",
                             placeholder="Enter your LLM API key"),
             ui.input_action_button("clear_token", "Clear Token", class_="btn-secondary sidebar-btn-full clear-token"),
@@ -177,10 +218,54 @@ def server(input, output, session):
         )
         ui.modal_show(m)
 
+    # Dynamic model selector that updates when provider changes
+    @output
+    @render.ui
+    def model_selector():
+        models = available_models.get()
+        if not models:
+            return ui.p("No models available", class_="text-muted")
+        # Use saved selection if it's in the list, otherwise default to first
+        saved = selected_model.get()
+        selected = saved if saved in models else models[0]
+        return ui.input_select("llm_model", "Model",
+                              choices=models,
+                              selected=selected)
+
+    # Save model selection when it changes
+    @reactive.Effect
+    @reactive.event(input.llm_model)
+    def save_model_selection():
+        try:
+            model = input.llm_model()
+            if model:
+                selected_model.set(model)
+        except Exception:
+            pass
+
+    # Update available models when provider changes
+    @reactive.Effect
+    @reactive.event(input.llm_provider)
+    def update_models_on_provider_change():
+        try:
+            provider = input.llm_provider()
+            selected_provider.set(provider)
+            ui.notification_show(f"Fetching {provider} models...", duration=2, id="fetch_models")
+            models = list_available_models(provider)
+            available_models.set(models)
+            ui.notification_remove("fetch_models")
+        except Exception:
+            pass
+
     # Close settings modal when Save & Close is clicked
     @reactive.Effect
     @reactive.event(input.close_settings)
     def close_settings():
+        # Save settings to file
+        save_settings({
+            "provider": selected_provider.get(),
+            "model": selected_model.get()
+        })
         ui.modal_remove()
         ui.notification_show("Settings saved", type="message", duration=2)
     
@@ -193,7 +278,6 @@ def server(input, output, session):
     chat_initialized = reactive.Value(False)  # Track if chat has been initialized
     selected_year = reactive.Value(datetime.now().year)  # Track selected year for LLM tools
     ink_picker_date = reactive.Value(None)  # Track which date's ink picker is open
-    initial_year_set = reactive.Value(False)  # Track if year has been initialized (skip first clear)
 
     # Load inks from cache on startup
     @reactive.Effect
@@ -254,12 +338,10 @@ def server(input, output, session):
         # Update API assignments
         api_assignments.set(explicit)
 
-        # Clear session assignments and themes only on subsequent year changes (not initial load)
-        if initial_year_set.get():
-            session_assignments.set({})
-            session_themes.set({})
-        else:
-            initial_year_set.set(True)
+        # Note: Session assignments and themes are NOT cleared on year change.
+        # They use full date strings (YYYY-MM-DD) so they naturally only display
+        # when viewing the correct year. This allows users to navigate between
+        # years without losing their work.
 
     # Helper to get merged assignments (API takes precedence over session)
     def get_merged_assignments_dict():
@@ -702,6 +784,41 @@ def server(input, output, session):
             except:
                 pass
 
+    # Track button clicks for ink collection API delete buttons
+    _ink_api_delete_clicks = {}
+
+    @reactive.Effect
+    def observe_ink_api_delete_buttons():
+        """Handle API delete button clicks in ink collection view."""
+        inks = ink_data.get()
+        if not inks:
+            return
+
+        with reactive.isolate():
+            api = api_assignments.get()
+
+        # Build reverse lookup: ink_idx -> date_str for API assignments
+        api_ink_to_date = {idx: date_str for date_str, idx in api.items()}
+
+        for idx in range(len(inks)):
+            # Only process if this ink has an API assignment
+            if idx not in api_ink_to_date:
+                continue
+
+            button_id = f"ink_api_delete_{idx}"
+
+            try:
+                current_clicks = getattr(input, button_id, lambda: 0)()
+                prev_clicks = _ink_api_delete_clicks.get(button_id, 0)
+
+                if current_clicks > prev_clicks:
+                    _ink_api_delete_clicks[button_id] = current_clicks
+                    date_str = api_ink_to_date[idx]
+                    ink = inks[idx]
+                    show_api_delete_confirmation_modal(date_str, idx, ink)
+            except:
+                pass
+
     def handle_save_assignment(date_str: str, ink_idx: int, inks, year: int, themes):
         """Handle saving a session assignment to API."""
         try:
@@ -1065,6 +1182,9 @@ def server(input, output, session):
 
     # Track previous date values for ink collection date pickers
     _ink_collection_prev_dates = {}
+
+    # Track button clicks for ink collection remove buttons
+    _ink_collection_remove_clicks = {}
 
     # Track button clicks for assign buttons
     _assign_button_clicks = {}
@@ -1527,7 +1647,10 @@ def server(input, output, session):
 
             try:
                 # Handle remove button (only for session assignments)
-                if not change_processed and current_date and remove_clicks.get(idx, 0) > 0:
+                current_remove_clicks = remove_clicks.get(idx, 0)
+                prev_remove_clicks = _ink_collection_remove_clicks.get(idx, 0)
+                if not change_processed and current_date and current_remove_clicks > prev_remove_clicks:
+                    _ink_collection_remove_clicks[idx] = current_remove_clicks
                     # Unassign - function derives ink_idx from session
                     new_session, result = move_ink_assignment(
                         session=session,
@@ -1543,19 +1666,41 @@ def server(input, output, session):
                         ui.notification_show(f"Removed {ink_name}", type="message", duration=3)
                         change_processed = True
                     continue
+                # Update tracking even if no action taken
+                _ink_collection_remove_clicks[idx] = current_remove_clicks
 
                 # Handle date picker changes
+                # Track as tuple: (value, observation_count)
+                # We need 2 observations before acting to avoid Bootstrap datepicker auto-init issues
                 new_date_value = input_values.get(idx)
-                if not new_date_value:
-                    _ink_collection_prev_dates[idx] = None
+                prev_info = _ink_collection_prev_dates.get(idx)
+
+                new_val = new_date_value.strftime("%Y-%m-%d") if new_date_value else ""
+
+                # First observation - just record, don't act
+                if prev_info is None:
+                    _ink_collection_prev_dates[idx] = (new_val, 1)
                     continue
 
-                new_date_str = new_date_value.strftime("%Y-%m-%d")
-                prev_value = _ink_collection_prev_dates.get(idx)
+                prev_value, obs_count = prev_info
 
-                # Check if this is a real change (not initial render)
-                is_new_assignment = not current_date and prev_value is None
-                is_date_change = prev_value is not None and new_date_str != prev_value
+                # Second observation - update baseline but don't act yet
+                # This handles Bootstrap datepicker auto-initializing with today's date
+                if obs_count < 2:
+                    _ink_collection_prev_dates[idx] = (new_val, 2)
+                    continue
+
+                if not new_date_value:
+                    _ink_collection_prev_dates[idx] = ("", 2)
+                    continue
+
+                new_date_str = new_val
+
+                # Check if this is a real change (user action, not initial render)
+                # New assignment: previously empty, now has a date
+                is_new_assignment = not current_date and prev_value == "" and new_date_str
+                # Date change: previously had a date, now different
+                is_date_change = prev_value and new_date_str != prev_value
 
                 if not change_processed and (is_new_assignment or is_date_change):
                     # Use unified move function (handles assign, move, and validation)
@@ -1582,11 +1727,11 @@ def server(input, output, session):
                     ink_name = result.data.get("ink_name", "ink")
                     action = "Moved" if current_date else "Assigned"
                     ui.notification_show(f"{action} {ink_name} to {new_date_str}", type="message", duration=3)
-                    _ink_collection_prev_dates[idx] = new_date_str
+                    _ink_collection_prev_dates[idx] = (new_date_str, 2)
                     change_processed = True
                     continue
 
-                _ink_collection_prev_dates[idx] = new_date_str
+                _ink_collection_prev_dates[idx] = (new_date_str, 2)
 
             except Exception:
                 pass
@@ -1679,11 +1824,16 @@ def server(input, output, session):
         if not inks:
             return None
 
-        # Get provider from settings (with default fallback)
+        # Get provider and model from settings (with default fallback)
         try:
             provider = input.llm_provider()
         except:
-            provider = "openai"
+            provider = selected_provider.get()  # Use saved selection
+
+        try:
+            model = input.llm_model()
+        except:
+            model = selected_model.get()  # Use saved selection
 
         return initialize_chat_session(
             inks=inks,
@@ -1693,7 +1843,8 @@ def server(input, output, session):
             selected_year_reactive=selected_year,
             session_assignments_reactive=session_assignments,
             api_assignments_reactive=api_assignments,
-            session_themes_reactive=session_themes
+            session_themes_reactive=session_themes,
+            model=model
         )
 
     # Handle chat messages

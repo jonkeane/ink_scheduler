@@ -18,7 +18,8 @@ def initialize_chat_session(
     selected_year_reactive,
     session_assignments_reactive,
     api_assignments_reactive,
-    session_themes_reactive
+    session_themes_reactive,
+    model: str | None = None
 ):
     """
     Initialize a chat session with tools and context.
@@ -42,7 +43,7 @@ def initialize_chat_session(
     try:
         # Create chat instance with system prompt
         system_message = get_chat_system_prompt(len(inks), year)
-        chat_obj = create_llm_chat(provider, system_prompt=system_message)
+        chat_obj = create_llm_chat(provider, model=model, system_prompt=system_message)
 
         # Register tools with session/api assignment state
         tool_functions, snapshot_updater = create_tool_functions(

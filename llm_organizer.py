@@ -4,7 +4,61 @@ LLM-powered ink organizer using chatlas
 from typing import List, Dict, Optional
 import json
 from chatlas import ChatAnthropic, ChatOpenAI
+import anthropic
+import openai
 import os
+
+
+# Fallback models if API call fails
+DEFAULT_MODELS = {
+    "anthropic": [
+        "claude-sonnet-4-20250514",
+        "claude-opus-4-20250514",
+        "claude-3-5-haiku-20241022",
+    ],
+    "openai": [
+        "gpt-4o",
+        "gpt-4o-mini",
+        "gpt-4-turbo",
+        "o1",
+        "o1-mini",
+    ],
+}
+
+
+def list_available_models(provider: str) -> list[str]:
+    """
+    Fetch available models from the provider's API.
+
+    Args:
+        provider: "anthropic" or "openai"
+
+    Returns:
+        List of model IDs available for the provider
+    """
+    try:
+        if provider == "anthropic":
+            client = anthropic.Anthropic()  # Uses ANTHROPIC_API_KEY
+            response = client.models.list()
+            models = [m.id for m in response.data]
+            # Sort to put claude-4 models first, then claude-3
+            models.sort(key=lambda x: (not x.startswith("claude-sonnet-4"),
+                                        not x.startswith("claude-opus-4"),
+                                        x))
+            return models if models else DEFAULT_MODELS["anthropic"]
+        elif provider == "openai":
+            client = openai.OpenAI()  # Uses OPENAI_API_KEY
+            response = client.models.list()
+            # Filter to chat-capable models
+            models = [m.id for m in response.data
+                      if m.id.startswith(("gpt-4", "gpt-3.5", "o1", "o3"))]
+            models.sort(reverse=True)  # Newer models first
+            return models if models else DEFAULT_MODELS["openai"]
+        else:
+            return []
+    except Exception as e:
+        print(f"Error fetching models for {provider}: {e}")
+        return DEFAULT_MODELS.get(provider, [])
 
 
 def format_ink_for_llm(ink: Dict, idx: int) -> str:

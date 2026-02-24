@@ -6,6 +6,35 @@ from typing import List, Dict, Optional
 import json
 
 
+def extract_ink_info(ink: dict, idx: int) -> dict:
+    """
+    Extract standardized ink information from an ink dictionary.
+
+    This is the single source of truth for what ink fields are exposed
+    to the LLM tools. Add new fields here to make them available everywhere.
+
+    Args:
+        ink: Raw ink dictionary from the API
+        idx: Index of the ink in the collection
+
+    Returns:
+        Dictionary with standardized ink information
+    """
+    return {
+        "index": idx,
+        "brand": ink.get("brand_name", "Unknown"),
+        "name": ink.get("name", "Unknown"),
+        "ink_cluster_tags": ink.get("cluster_tags", []),
+        "color": ink.get("color", ""),
+        "line_name": ink.get("line_name", ""),
+        "kind": ink.get("kind", ""),
+        "used": ink.get("used", False),
+        "usage_count": ink.get("usage_count", 0),
+        "last_used_on": ink.get("last_used_on", ""),
+        "comment": ink.get("comment", ""),
+    }
+
+
 def parse_comment_json(comment: Optional[str]) -> Dict:
     """
     Parse a comment field as JSON, returning empty dict if invalid.
@@ -337,13 +366,9 @@ def search_inks(inks: List[Dict], year: int,
             if brand.lower() not in ink.get("brand_name", "").lower():
                 continue
 
-        matches.append({
-            "index": idx,
-            "brand": ink.get("brand_name", "Unknown"),
-            "name": ink.get("name", "Unknown"),
-            "color_tags": ink.get("cluster_tags", []),
-            "already_assigned": has_assignment(ink, year)
-        })
+        ink_info = extract_ink_info(ink, idx)
+        ink_info["already_assigned"] = has_assignment(ink, year)
+        matches.append(ink_info)
 
     return matches
 

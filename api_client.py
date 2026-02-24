@@ -29,7 +29,8 @@ def fetch_all_collected_inks(api_token: str, base_url: str = "https://www.founta
         # Make paginated request
         params = {
             "page[number]": current_page,
-            "page[size]": page_size
+            "page[size]": page_size,
+            "include": "macro_cluster"
         }
 
         response = requests.get(base_url, headers=headers, params=params)

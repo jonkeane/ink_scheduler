@@ -7,4 +7,6 @@ dependencies = [
     "requests",
     "pandas",
     "numpy",
+    "anthropic>=0.83.0",
+    "openai>=2.22.0",
 ]

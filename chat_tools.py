@@ -22,6 +22,7 @@ from typing import List, Dict, Optional, Any
 import calendar
 
 from assignment_logic import (
+    extract_ink_info,
     find_ink_by_name,
     search_inks as search_inks_pure,
     move_ink_assignment,
@@ -84,13 +85,9 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
 
         ink_list = []
         for idx, ink in enumerate(inks):
-            ink_list.append({
-                "index": idx,
-                "brand": ink.get("brand_name", "Unknown"),
-                "name": ink.get("name", "Unknown"),
-                "color_tags": ink.get("cluster_tags", []),
-                "already_assigned": idx in assigned_indices
-            })
+            ink_info = extract_ink_info(ink, idx)
+            ink_info["already_assigned"] = idx in assigned_indices
+            ink_list.append(ink_info)
 
         return {"success": True, "total_inks": len(inks), "inks": ink_list}
 
@@ -580,13 +577,8 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
             if not matches_filters(ink):
                 continue
 
-            ink_info = {
-                "index": idx,
-                "brand": ink.get("brand_name", "Unknown"),
-                "name": ink.get("name", "Unknown"),
-                "color_tags": ink.get("cluster_tags", []),
-                "status": status
-            }
+            ink_info = extract_ink_info(ink, idx)
+            ink_info["status"] = status
             if current_date:
                 ink_info["current_date"] = current_date
 

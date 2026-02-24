@@ -393,7 +393,8 @@ def render_ink_collection_view(
         ui.div("Color", class_="ink-col-color"),
         ui.div("Brand", class_="ink-col-brand"),
         ui.div("Name", class_="ink-col-name"),
-        ui.div("Assignment", class_="ink-col-assignment"),
+        ui.div("Actions", class_="ink-col-actions"),
+        ui.div("Date", class_="ink-col-date"),
         class_="ink-header-row"
     )
 
@@ -436,41 +437,65 @@ def _render_ink_collection_row(
     # Color and info columns
     color_col = ui.div(swatch, class_="ink-swatch-col")
     brand_col = ui.div(brand, class_="ink-brand-col")
-    name_col = ui.div(name, class_="ink-name-col")
 
-    # Assignment column
+    # Name column - include swatched badge if API assigned
     if is_api_assigned:
-        # API assigned - show as read-only
-        date_obj = datetime.strptime(current_date, "%Y-%m-%d")
-        assignment_col = ui.div(
-            ui.span(date_obj.strftime("%b %d"), class_="api-date-display"),
+        name_col = ui.div(
+            ui.span(name, class_="ink-name-text"),
             ui.span("swatched", class_="api-badge"),
-            class_="ink-assignment-col"
+            class_="ink-name-col"
+        )
+    else:
+        name_col = ui.div(name, class_="ink-name-col")
+
+    # Actions and Date columns
+    if is_api_assigned:
+        # API assigned - trash button only
+        date_obj = datetime.strptime(current_date, "%Y-%m-%d")
+        trash_icon = ui.HTML(TRASH_ICON_SVG)
+        actions_col = ui.div(
+            ui.input_action_button(
+                f"ink_api_delete_{idx}",
+                trash_icon,
+                class_="btn-sm btn-outline-danger ink-action-btn",
+                title="Remove from API"
+            ),
+            class_="ink-actions-col"
+        )
+        date_col = ui.div(
+            ui.span(date_obj.strftime("%b %d, %Y"), class_="ink-date-display"),
+            class_="ink-date-col"
         )
         row_class = "ink-row ink-row-api"
     elif current_date:
-        # Session assigned - editable
+        # Session assigned - assign/unassign buttons
         date_obj = datetime.strptime(current_date, "%Y-%m-%d")
-        assignment_col = ui.div(
-            ui.input_date(f"ink_date_{idx}", "", value=date_obj.date()),
+        actions_col = ui.div(
             ui.input_action_button(
                 f"ink_save_{idx}",
-                "Save",
-                class_="btn-sm btn-outline-success"
+                "assign",
+                class_="btn-sm btn-outline-success ink-action-btn",
+                title="Save assignment to API"
             ),
             ui.input_action_button(
                 f"ink_remove_{idx}",
-                "✕",
-                class_="btn-sm btn-outline-danger ink-remove-btn"
+                "unassign",
+                class_="btn-sm btn-outline-secondary ink-action-btn",
+                title="Clear assignment"
             ),
-            class_="ink-assignment-col"
+            class_="ink-actions-col"
+        )
+        date_col = ui.div(
+            ui.input_date(f"ink_date_{idx}", "", value=date_obj.date()),
+            class_="ink-date-col"
         )
         row_class = "ink-row ink-row-session"
     else:
-        # Unassigned - show date picker
-        assignment_col = ui.div(
-            ui.input_date(f"ink_date_{idx}", "", value=None),
-            class_="ink-assignment-col"
+        # Unassigned - empty actions, date picker
+        actions_col = ui.div(class_="ink-actions-col")
+        date_col = ui.div(
+            ui.input_date(f"ink_date_{idx}", "", value=""),
+            class_="ink-date-col"
         )
         row_class = "ink-row"
 
@@ -478,7 +503,8 @@ def _render_ink_collection_row(
         color_col,
         brand_col,
         name_col,
-        assignment_col,
+        actions_col,
+        date_col,
         class_=row_class
     )
 
