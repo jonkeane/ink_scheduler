@@ -82,7 +82,11 @@ app_ui = ui.page_fluid(
             ui.input_action_button("fetch_inks", "Fetch My Inks", class_="btn-primary sidebar-btn-full"),
             ui.output_text("cache_status", inline=True),
             ui.h4("AI Organizer"),
-            ui.chat_ui("ink_chat", height="400px"),
+            ui.div(
+                ui.chat_ui("ink_chat", height="400px"),
+                ui.input_action_button("cancel_chat", "", class_="cancel-chat-btn", disabled="disabled"),
+                class_="chat-container"
+            ),
             ui.output_text("session_status", inline=True),
             ui.download_button("save_session", "Save Session", class_="btn-outline-secondary sidebar-btn-full"),
             ui.input_file("load_session", None, accept=[".json"], button_label="Load Session", multiple=False),
@@ -1898,6 +1902,21 @@ def server(input, output, session):
         chat_initialized.set(False)
         await chat.clear_messages()
         ui.notification_show("Chat reset! Send a message to start a new conversation.", type="message")
+
+    # Cancel chat stream
+    @reactive.Effect
+    @reactive.event(input.cancel_chat)
+    def handle_cancel_chat():
+        """Cancel the current chat stream."""
+        chat.latest_message_stream.cancel()
+        ui.notification_show("Response cancelled", type="warning", duration=2)
+
+    # Enable/disable cancel button based on stream status
+    @reactive.Effect
+    def update_cancel_button_state():
+        """Enable cancel button only when streaming."""
+        is_running = chat.latest_message_stream.status() == "running"
+        ui.update_action_button("cancel_chat", disabled=not is_running)
 
 
 app = App(app_ui, server)

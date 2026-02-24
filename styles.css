@@ -712,3 +712,44 @@ input#year.form-control:focus {
     padding-top: 15px;
     border-top: 1px solid #eee;
 }
+
+/* Chat container with cancel button */
+.chat-container {
+    position: relative;
+}
+
+.cancel-chat-btn {
+    position: absolute;
+    bottom: 9px;
+    right: 11px;
+    z-index: 100;
+    width: 26px;
+    height: 26px;
+    min-width: 26px;
+    padding: 0;
+    border-radius: 50%;
+    background-color: #dc3545;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background-color 0.15s;
+}
+
+.cancel-chat-btn::before {
+    content: "";
+    display: block;
+    width: 10px;
+    height: 10px;
+    background-color: white;
+    border-radius: 2px;
+}
+
+.cancel-chat-btn:disabled {
+    display: none;
+}
+
+.cancel-chat-btn:not(:disabled):hover {
+    background-color: #c82333;
+}
