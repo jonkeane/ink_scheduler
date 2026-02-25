@@ -44,6 +44,12 @@ def fetch_all_collected_inks(api_token: str, base_url: str = "https://www.founta
         # Flatten the nested structure
         for item in raw_inks:
             attrs = item.get("attributes", {})
+
+            # The ink_id attribute corresponds to the macro_cluster ID
+            # (verified by matching with included macro_cluster objects)
+            ink_id = attrs.get("ink_id")
+            macro_cluster_id = str(ink_id) if ink_id else None
+
             flattened = {
                 "id": item.get("id"),
                 "brand_name": attrs.get("brand_name", ""),
@@ -64,6 +70,7 @@ def fetch_all_collected_inks(api_token: str, base_url: str = "https://www.founta
                 "private_comment": attrs.get("private_comment", ""),  # Private comment (where assignments go)
                 "simplified_brand_name": attrs.get("simplified_brand_name", ""),
                 "simplified_ink_name": attrs.get("simplified_ink_name", ""),
+                "macro_cluster_id": macro_cluster_id,  # ID for linking to FPC cluster page
             }
             all_inks.append(flattened)
 
@@ -94,6 +101,11 @@ def flatten_ink_data(raw_ink: Dict) -> Dict:
         Flattened dictionary with all attributes at top level
     """
     attrs = raw_ink.get("attributes", {})
+
+    # The ink_id attribute corresponds to the macro_cluster ID
+    ink_id = attrs.get("ink_id")
+    macro_cluster_id = str(ink_id) if ink_id else None
+
     return {
         "id": raw_ink.get("id"),
         "brand_name": attrs.get("brand_name", ""),
@@ -109,6 +121,7 @@ def flatten_ink_data(raw_ink: Dict) -> Dict:
         "usage_count": attrs.get("usage_count", 0),
         "comment": attrs.get("comment", ""),  # Public comment from API
         "private_comment": attrs.get("private_comment", ""),  # Private comment (where assignments go)
+        "macro_cluster_id": macro_cluster_id,  # ID for linking to FPC cluster page
     }
 
 

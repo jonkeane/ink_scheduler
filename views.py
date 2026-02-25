@@ -36,6 +36,16 @@ TRASH_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="14" height="1
     <line x1="14" y1="11" x2="14" y2="17"/>
 </svg>'''
 
+# External link icon for FPC cluster page
+FPC_LINK_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+    <polyline points="15 3 21 3 21 9"/>
+    <line x1="10" y1="14" x2="21" y2="3"/>
+</svg>'''
+
+# FPC base URL for cluster pages
+FPC_CLUSTER_URL = "https://www.fountainpencompanion.com/inks"
+
 
 # =============================================================================
 # Calendar View
@@ -126,9 +136,28 @@ def _render_calendar_cell_with_ink(
     ink_name = ink.get("name", "Unknown")
     brand = ink.get("brand_name", "")
     ink_color = ink.get("color", "#cccccc")
+    macro_cluster_id = ink.get("macro_cluster_id")
 
     is_session = date_str in session_assignments and date_str not in api_assignments
     is_protected = date_str in api_assignments
+
+    # Build ink name element with optional FPC link
+    if macro_cluster_id:
+        fpc_link_icon = ui.HTML(FPC_LINK_SVG)
+        fpc_url = f"{FPC_CLUSTER_URL}/{macro_cluster_id}"
+        ink_name_element = ui.span(
+            ui.span(ink_name),
+            ui.tags.a(
+                fpc_link_icon,
+                href=fpc_url,
+                target="_blank",
+                class_="calendar-fpc-link",
+                title="View on Fountain Pen Companion"
+            ),
+            class_="calendar-ink-name"
+        )
+    else:
+        ink_name_element = ui.span(ink_name, class_="calendar-ink-name")
 
     cell_components = [
         ui.div(
@@ -137,7 +166,7 @@ def _render_calendar_cell_with_ink(
             class_="calendar-cell-header"
         ),
         ui.span(brand, class_="calendar-brand"),
-        ui.span(ink_name, class_="calendar-ink-name")
+        ink_name_element
     ]
 
     main_content = ui.div(*cell_components, class_="calendar-cell-content")
@@ -267,13 +296,31 @@ def _render_list_row_with_ink(
     color = ink.get("color", "#888888")
     brand = ink.get("brand_name", "Unknown")
     name = ink.get("name", "Unknown")
+    macro_cluster_id = ink.get("macro_cluster_id")
 
     can_edit = date_str in session_assignments and date_str not in api_assignments
     is_api = date_str in api_assignments
 
     swatch = ink_swatch_fn(color, "sm")
     brand_col = ui.div(brand, class_="list-brand-col")
-    name_col = ui.div(name, class_="list-name-col")
+
+    # Build name column with optional FPC link
+    if macro_cluster_id:
+        fpc_link_icon = ui.HTML(FPC_LINK_SVG)
+        fpc_url = f"{FPC_CLUSTER_URL}/{macro_cluster_id}"
+        name_col = ui.div(
+            ui.span(name),
+            ui.tags.a(
+                fpc_link_icon,
+                href=fpc_url,
+                target="_blank",
+                class_="list-fpc-link",
+                title="View on Fountain Pen Companion"
+            ),
+            class_="list-name-col"
+        )
+    else:
+        name_col = ui.div(name, class_="list-name-col")
 
     if can_edit:
         action_components = [

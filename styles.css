@@ -251,6 +251,40 @@ input#year.form-control:focus {
     display: block;
     margin-top: 2px;
 }
+.calendar-fpc-link {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 4px;
+    color: #888;
+    text-decoration: none;
+    opacity: 0.6;
+    transition: opacity 0.15s ease-in-out, color 0.15s ease-in-out;
+    vertical-align: middle;
+}
+.calendar-fpc-link:hover {
+    opacity: 1;
+    color: #007bff;
+}
+.calendar-fpc-link svg {
+    vertical-align: middle;
+}
+.list-fpc-link {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 6px;
+    color: #888;
+    text-decoration: none;
+    opacity: 0.6;
+    transition: opacity 0.15s ease-in-out, color 0.15s ease-in-out;
+    vertical-align: middle;
+}
+.list-fpc-link:hover {
+    opacity: 1;
+    color: #007bff;
+}
+.list-fpc-link svg {
+    vertical-align: middle;
+}
 .calendar-remove-btn {
     position: absolute;
     top: 4px;
