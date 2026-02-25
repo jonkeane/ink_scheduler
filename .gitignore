@@ -206,13 +206,6 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Environment variables
-.env
-
-# Cache files
-ink_cache.json
-llm_test_output.json
-
 # Python
 __pycache__/
 *.py[cod]
@@ -255,4 +248,14 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
-.posit/publish/**.toml
+.posit/**/**.toml
+
+# Environment variables
+.env
+
+# Cache files
+ink_cache.json
+llm_test_output.json
+uv.lock
+session_*.json
+app_settings.json

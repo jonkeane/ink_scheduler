@@ -4,3 +4,5 @@ pandas
 pytest
 requests
 shiny
+anthropic
+openai
