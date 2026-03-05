@@ -5,8 +5,12 @@ requires-python = ">= 3.10"
 dependencies = [
     "shiny",
     "requests",
+    "python_dotenv",
     "pandas",
-    "numpy",
+    "chatlas>=0.15.1",
     "anthropic>=0.83.0",
     "openai>=2.22.0",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest"]

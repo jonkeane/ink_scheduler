@@ -7,7 +7,7 @@ import json
 import traceback
 
 # Increase websocket ping timeout to prevent disconnects during long LLM operations
-os.environ["SHINY_WEBSOCKET_PING_TIMEOUT"] = "480"
+os.environ["SHINY_WEBSOCKET_PING_TIMEOUT"] = "1200"
 
 # Configure chatlas logging before importing chatlas-related modules
 os.environ["CHATLAS_LOG"] = "debug"
