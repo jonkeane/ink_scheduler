@@ -29,6 +29,7 @@ def sample_inks():
     return [
         {
             "id": "1",
+            "macro_cluster_id": "macro_0",
             "brand_name": "Diamine",
             "name": "Blue Velvet",
             "color": "#1a237e",
@@ -41,6 +42,7 @@ def sample_inks():
         },
         {
             "id": "2",
+            "macro_cluster_id": "macro_1",
             "brand_name": "Pilot",
             "name": "Iroshizuku Kon-peki",
             "color": "#3366cc",
@@ -53,6 +55,7 @@ def sample_inks():
         },
         {
             "id": "3",
+            "macro_cluster_id": "macro_2",
             "brand_name": "Noodler's",
             "name": "Apache Sunset",
             "color": "#ff6600",
@@ -65,6 +68,7 @@ def sample_inks():
         },
         {
             "id": "4",
+            "macro_cluster_id": "macro_3",
             "brand_name": "Sailor",
             "name": "Yama-dori",
             "color": "#006666",
@@ -77,6 +81,7 @@ def sample_inks():
         },
         {
             "id": "5",
+            "macro_cluster_id": "macro_4",
             "brand_name": "Diamine",
             "name": "Oxblood",
             "color": "#660000",
@@ -96,11 +101,13 @@ def sample_inks_minimal():
     return [
         {
             "id": "1",
+            "macro_cluster_id": "minimal_0",
             "brand_name": "Test Brand",
             "name": "Test Ink"
         },
         {
             "id": "2",
+            "macro_cluster_id": "minimal_1",
             "brand_name": "Another Brand",
             "name": "Another Ink"
         }
@@ -191,11 +198,11 @@ def mock_llm_response():
 
 @pytest.fixture
 def sample_session_assignments():
-    """Sample session assignments dictionary."""
+    """Sample session assignments dictionary with prefixed identifiers."""
     return {
-        "2026-01-01": 0,
-        "2026-01-15": 1,
-        "2026-02-14": 4
+        "2026-01-01": "macro:macro_0",
+        "2026-01-15": "macro:macro_1",
+        "2026-02-14": "macro:macro_4"
     }
 
 
@@ -203,8 +210,8 @@ def sample_session_assignments():
 def sample_api_assignments():
     """Sample API assignments dictionary (protected, from ink cache)."""
     return {
-        "2026-01-15": 1,
-        "2026-03-01": 3
+        "2026-01-15": "macro:macro_1",
+        "2026-03-01": "macro:macro_3"
     }
 
 

@@ -308,8 +308,8 @@ class TestGetMonthTheme:
             "2026-01": {"theme": "Session Theme", "description": "From session"}
         }
         # Even with inks that have themes, session should win
-        inks = [{"private_comment": '{"swatch2026":{"theme":"API Theme","theme_description":"From API"}}'}]
-        daily = {"2026-01-01": 0}
+        inks = [{"macro_cluster_id": "macro_0", "private_comment": '{"swatch2026":{"theme":"API Theme","theme_description":"From API"}}'}]
+        daily = {"2026-01-01": "macro:macro_0"}
 
         result = get_month_theme(2026, 1, session_themes, inks, daily)
 
@@ -320,8 +320,8 @@ class TestGetMonthTheme:
     def test_api_fallback_when_no_session(self):
         """Falls back to API when no session theme."""
         session_themes = {}
-        inks = [{"private_comment": '{"swatch2026":{"theme":"API Theme","theme_description":"From API"}}'}]
-        daily = {"2026-01-01": 0}
+        inks = [{"macro_cluster_id": "macro_0", "private_comment": '{"swatch2026":{"theme":"API Theme","theme_description":"From API"}}'}]
+        daily = {"2026-01-01": "macro:macro_0"}
 
         result = get_month_theme(2026, 1, session_themes, inks, daily)
 
@@ -340,8 +340,8 @@ class TestGetMonthTheme:
     def test_no_theme_when_no_first_day_assignment(self):
         """Returns 'none' when first day has no assignment."""
         session_themes = {}
-        inks = [{"private_comment": ""}]
-        daily = {"2026-01-15": 0}  # Not the first day
+        inks = [{"macro_cluster_id": "macro_0", "private_comment": ""}]
+        daily = {"2026-01-15": "macro:macro_0"}  # Not the first day
 
         result = get_month_theme(2026, 1, session_themes, inks, daily)
 
@@ -350,8 +350,8 @@ class TestGetMonthTheme:
     def test_no_theme_when_ink_has_no_theme_comment(self):
         """Returns 'none' when ink has no theme in comment."""
         session_themes = {}
-        inks = [{"private_comment": "Just a plain comment"}]
-        daily = {"2026-01-01": 0}
+        inks = [{"macro_cluster_id": "macro_0", "private_comment": "Just a plain comment"}]
+        daily = {"2026-01-01": "macro:macro_0"}
 
         result = get_month_theme(2026, 1, session_themes, inks, daily)
 
@@ -362,8 +362,8 @@ class TestGetMonthTheme:
         session_themes = {
             "2026-01": {"theme": "", "description": ""}  # Empty theme
         }
-        inks = [{"private_comment": '{"swatch2026":{"theme":"API Theme","theme_description":"Desc"}}'}]
-        daily = {"2026-01-01": 0}
+        inks = [{"macro_cluster_id": "macro_0", "private_comment": '{"swatch2026":{"theme":"API Theme","theme_description":"Desc"}}'}]
+        daily = {"2026-01-01": "macro:macro_0"}
 
         result = get_month_theme(2026, 1, session_themes, inks, daily)
 
@@ -381,11 +381,11 @@ class TestPreparePostSaveUpdates:
     def test_updates_ink_comment(self):
         """Ink comment should be updated in the returned list."""
         inks = [
-            {"id": 1, "private_comment": "old comment"},
-            {"id": 2, "private_comment": "other ink"}
+            {"id": 1, "macro_cluster_id": "macro_0", "private_comment": "old comment"},
+            {"id": 2, "macro_cluster_id": "macro_1", "private_comment": "other ink"}
         ]
         result = prepare_post_save_updates(
-            inks, ink_idx=0, updated_comment="new comment",
+            inks, macro_cluster_id="macro:macro_0", updated_comment="new comment",
             date_str="2026-01-01", year=2026, current_session={}
         )
 
@@ -394,11 +394,11 @@ class TestPreparePostSaveUpdates:
 
     def test_removes_date_from_session(self):
         """Saved date should be removed from session assignments."""
-        inks = [{"id": 1, "private_comment": ""}]
-        current_session = {"2026-01-01": 0, "2026-01-15": 1}
+        inks = [{"id": 1, "macro_cluster_id": "macro_0", "private_comment": ""}]
+        current_session = {"2026-01-01": "macro:macro_0", "2026-01-15": "macro:macro_1"}
 
         result = prepare_post_save_updates(
-            inks, ink_idx=0, updated_comment="new",
+            inks, macro_cluster_id="macro:macro_0", updated_comment="new",
             date_str="2026-01-01", year=2026, current_session=current_session
         )
 
@@ -407,23 +407,23 @@ class TestPreparePostSaveUpdates:
 
     def test_preserves_other_session_assignments(self):
         """Other session assignments should be preserved."""
-        inks = [{"id": 1, "private_comment": ""}]
-        current_session = {"2026-01-01": 0, "2026-02-14": 1, "2026-03-01": 2}
+        inks = [{"id": 1, "macro_cluster_id": "macro_0", "private_comment": ""}]
+        current_session = {"2026-01-01": "macro:macro_0", "2026-02-14": "macro:macro_1", "2026-03-01": "macro:macro_2"}
 
         result = prepare_post_save_updates(
-            inks, ink_idx=0, updated_comment="new",
+            inks, macro_cluster_id="macro:macro_0", updated_comment="new",
             date_str="2026-01-01", year=2026, current_session=current_session
         )
 
-        assert result.new_session_assignments == {"2026-02-14": 1, "2026-03-01": 2}
+        assert result.new_session_assignments == {"2026-02-14": "macro:macro_1", "2026-03-01": "macro:macro_2"}
 
     def test_does_not_mutate_original_inks(self):
         """Original ink list should not be mutated."""
-        inks = [{"id": 1, "private_comment": "original"}]
+        inks = [{"id": 1, "macro_cluster_id": "macro_0", "private_comment": "original"}]
         original_comment = inks[0]["private_comment"]
 
         prepare_post_save_updates(
-            inks, ink_idx=0, updated_comment="new",
+            inks, macro_cluster_id="macro:macro_0", updated_comment="new",
             date_str="2026-01-01", year=2026, current_session={}
         )
 
@@ -431,16 +431,16 @@ class TestPreparePostSaveUpdates:
 
     def test_handles_missing_date_in_session(self):
         """Should handle case where date isn't in session."""
-        inks = [{"id": 1, "private_comment": ""}]
-        current_session = {"2026-02-14": 1}  # Different date
+        inks = [{"id": 1, "macro_cluster_id": "macro_0", "private_comment": ""}]
+        current_session = {"2026-02-14": "macro:macro_1"}  # Different date
 
         result = prepare_post_save_updates(
-            inks, ink_idx=0, updated_comment="new",
+            inks, macro_cluster_id="macro:macro_0", updated_comment="new",
             date_str="2026-01-01", year=2026, current_session=current_session
         )
 
         # Should not raise, session unchanged
-        assert result.new_session_assignments == {"2026-02-14": 1}
+        assert result.new_session_assignments == {"2026-02-14": "macro:macro_1"}
 
 
 # =============================================================================
@@ -496,9 +496,9 @@ class TestCellDataPreparation:
 
     def test_prepare_cell_data_with_ink(self):
         """Cell with assigned ink should have ink details."""
-        inks = [{"name": "Kon-Peki", "brand_name": "Iroshizuku", "color": "#007BA7"}]
-        daily = {"2026-01-15": 0}
-        session = {"2026-01-15": 0}
+        inks = [{"name": "Kon-Peki", "brand_name": "Iroshizuku", "color": "#007BA7", "macro_cluster_id": "macro_0"}]
+        daily = {"2026-01-15": "macro:macro_0"}
+        session = {"2026-01-15": "macro:macro_0"}
         api = {}
 
         cell = prepare_cell_data("2026-01-15", 15, inks, daily, session, api)
@@ -512,10 +512,10 @@ class TestCellDataPreparation:
 
     def test_prepare_cell_data_api_protected(self):
         """API assignment should be marked as protected."""
-        inks = [{"name": "Test", "brand_name": "Brand", "color": "#000"}]
-        daily = {"2026-01-15": 0}
+        inks = [{"name": "Test", "brand_name": "Brand", "color": "#000", "macro_cluster_id": "macro_0"}]
+        daily = {"2026-01-15": "macro:macro_0"}
         session = {}
-        api = {"2026-01-15": 0}
+        api = {"2026-01-15": "macro:macro_0"}
 
         cell = prepare_cell_data("2026-01-15", 15, inks, daily, session, api)
 
@@ -533,9 +533,9 @@ class TestCellDataPreparation:
 
     def test_prepare_month_cells(self):
         """Should prepare cells for entire month."""
-        inks = [{"name": "Ink1", "brand_name": "B1", "color": "#111"}]
-        daily = {"2026-01-01": 0}
-        session = {"2026-01-01": 0}
+        inks = [{"name": "Ink1", "brand_name": "B1", "color": "#111", "macro_cluster_id": "macro_0"}]
+        daily = {"2026-01-01": "macro:macro_0"}
+        session = {"2026-01-01": "macro:macro_0"}
         api = {}
 
         cells = prepare_month_cells(2026, 1, inks, daily, session, api)

@@ -23,9 +23,12 @@ from assignment_logic import (
     get_month_summary,
     move_ink_assignment,
     swap_ink_assignments,
+    shuffle_month_assignments,
     check_overwrite_conflict,
     build_swatch_comment_json,
     remove_swatch_from_comment,
+    get_ink_identifier,
+    find_ink_by_macro_cluster_id,
 )
 from api_client import fetch_all_collected_inks, update_ink_private_comment, fetch_single_ink
 from ink_cache import save_inks_to_cache, load_inks_from_cache, get_cache_info
@@ -98,23 +101,43 @@ app_ui = ui.page_fluid(
             ui.navset_tab(
             ui.nav_panel("Ink Calendar",
                 ui.div(
-                    ui.input_switch("view_mode", "List View", value=False, width="auto"),
-                    ui.input_action_button("prev_month", "←", class_="btn-secondary btn-sm nav-btn-prev"),
                     ui.div(
-                        ui.output_ui("month_label"),
-                        ui.input_numeric("year", None, value=datetime.now().year,
-                                       min=2020, max=2035, width="3rem"),
-                        class_="month-year-container"
+                        ui.div(
+                            ui.input_switch("view_mode", "List View", value=False, width="auto"),
+                            ui.input_action_button("prev_month", "←", class_="btn-secondary btn-sm"),
+                            ui.div(
+                                ui.output_ui("month_label"),
+                                ui.input_numeric("year", None, value=datetime.now().year,
+                                               min=2020, max=2035, width="3rem"),
+                                class_="month-year-container"
+                            ),
+                            ui.input_action_button("next_month", "→", class_="btn-secondary btn-sm"),
+                            class_="nav-left-row"
+                        ),
+                        ui.div(
+                            ui.output_ui("shuffle_month_btn"),
+                            ui.output_ui("save_all_month_btn"),
+                            class_="nav-left-row nav-left-buttons"
+                        ),
+                        class_="nav-left"
                     ),
-                    ui.input_action_button("next_month", "→", class_="btn-secondary btn-sm"),
                     ui.output_ui("theme_label"),
-                    ui.output_ui("save_all_month_btn"),
                     class_="nav-controls"
                 ),
                 ui.output_ui("main_view")
             ),
             ui.nav_panel("Ink Collection",
-                ui.input_text("ink_search", "Search inks:", placeholder="Type to filter by brand or name..."),
+                ui.div(
+                    ui.input_text("ink_search", "Search inks:", placeholder="Type to filter by brand or name..."),
+                    ui.input_checkbox_group(
+                        "ink_filter",
+                        "Show:",
+                        choices={"unassigned": "Unassigned", "session": "Session Assigned", "api": "API Assigned"},
+                        selected=["unassigned", "session", "api"],
+                        inline=True
+                    ),
+                    class_="ink-filter-controls"
+                ),
                 ui.output_ui("ink_collection_view")
             ),
             ui.nav_panel("Month Assignment",
@@ -282,6 +305,8 @@ def server(input, output, session):
     chat_initialized = reactive.Value(False)  # Track if chat has been initialized
     selected_year = reactive.Value(datetime.now().year)  # Track selected year for LLM tools
     ink_picker_date = reactive.Value(None)  # Track which date's ink picker is open
+    collection_sort_field = reactive.Value("brand")  # Sort field for collection view
+    collection_sort_direction = reactive.Value("asc")  # Sort direction for collection view
 
     # Load inks from cache on startup
     @reactive.Effect
@@ -509,6 +534,66 @@ def server(input, output, session):
             class_="btn-primary btn-sm save-all-month-btn"
         )
 
+    # Shuffle Month button - shows when there are >=2 shufflable session assignments
+    @output
+    @render.ui
+    def shuffle_month_btn():
+        year = input.year()
+        month = current_month.get()
+
+        session = session_assignments.get()
+        api = api_assignments.get()
+
+        # Count session assignments for this month that are not API-protected
+        month_prefix = f"{year}-{month:02d}"
+        shufflable_count = sum(
+            1 for date_str in session
+            if date_str.startswith(month_prefix) and date_str not in api
+        )
+
+        if shufflable_count < 2:
+            return ui.span()  # Nothing to shuffle
+
+        # Shuffle icon SVG
+        shuffle_icon = ui.HTML('''<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+             fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="16 3 21 3 21 8"/>
+            <line x1="4" y1="20" x2="21" y2="3"/>
+            <polyline points="21 16 21 21 16 21"/>
+            <line x1="15" y1="15" x2="21" y2="21"/>
+            <line x1="4" y1="4" x2="9" y2="9"/>
+        </svg>''')
+
+        return ui.input_action_button(
+            "shuffle_month",
+            ui.span(shuffle_icon, " Shuffle"),
+            class_="btn-outline-secondary btn-sm shuffle-month-btn"
+        )
+
+    # Handle Shuffle Month button click
+    @reactive.Effect
+    @reactive.event(input.shuffle_month)
+    def handle_shuffle_month():
+        year = input.year()
+        month = current_month.get()
+
+        session = session_assignments.get()
+        api = api_assignments.get()
+        inks = ink_data.get()
+
+        new_session, result = shuffle_month_assignments(
+            session=session,
+            api=api,
+            year=year,
+            month=month,
+            inks=inks,
+        )
+
+        if result.success:
+            session_assignments.set(new_session)
+        else:
+            ui.notification_show(result.message, type="warning", duration=3)
+
     # Handle Save All Month button click
     @reactive.Effect
     @reactive.event(input.save_all_month)
@@ -548,9 +633,16 @@ def server(input, output, session):
         saved_count = 0
         error_count = 0
 
-        for date_str, ink_idx in to_save:
+        for date_str, macro_cluster_id in to_save:
             try:
-                ink = inks[ink_idx]
+                # Look up ink by macro_cluster_id
+                result = find_ink_by_macro_cluster_id(macro_cluster_id, inks)
+                if not result:
+                    error_count += 1
+                    ui.notification_show(f"Could not find ink with macro_cluster_id {macro_cluster_id}", type="error", duration=5)
+                    continue
+
+                _, ink = result
 
                 # Fetch fresh data from API
                 try:
@@ -581,7 +673,7 @@ def server(input, output, session):
                 # Prepare state updates
                 updates = prepare_post_save_updates(
                     ink_data.get(),
-                    ink_idx,
+                    macro_cluster_id,
                     updated_comment,
                     date_str,
                     year,
@@ -598,8 +690,7 @@ def server(input, output, session):
 
             except Exception as e:
                 error_count += 1
-                ink_name = f"{inks[ink_idx].get('brand_name', '')} {inks[ink_idx].get('name', '')}"
-                ui.notification_show(f"Error saving {ink_name}: {str(e)}", type="error", duration=5)
+                ui.notification_show(f"Error saving assignment for {date_str}: {str(e)}", type="error", duration=5)
 
         ui.notification_remove("bulk_save_loading")
 
@@ -748,8 +839,8 @@ def server(input, output, session):
 
                 if detect_new_click(current_clicks, prev_clicks):
                     _save_button_clicks[button_id] = current_clicks
-                    ink_idx = session[date_str]
-                    handle_save_assignment(date_str, ink_idx, inks, year, themes)
+                    macro_cluster_id = session[date_str]
+                    handle_save_assignment(date_str, macro_cluster_id, inks, year, themes)
             except:
                 pass
 
@@ -767,14 +858,15 @@ def server(input, output, session):
             inks = ink_data.get()
             themes = session_themes.get()
 
-        # Build reverse lookup: ink_idx -> date_str
-        session_ink_to_date = {idx: date_str for date_str, idx in session.items() if date_str not in api}
+        # Build reverse lookup: macro_cluster_id -> date_str
+        session_macro_to_date = {macro_id: date_str for date_str, macro_id in session.items() if date_str not in api}
 
-        for idx in range(len(inks)):
+        for idx, ink in enumerate(inks):
             button_id = f"ink_save_{idx}"
+            ink_identifier = get_ink_identifier(ink)
 
             # Only process if this ink has a session assignment
-            if idx not in session_ink_to_date:
+            if not ink_identifier or ink_identifier not in session_macro_to_date:
                 continue
 
             try:
@@ -783,8 +875,8 @@ def server(input, output, session):
 
                 if current_clicks > prev_clicks:
                     _ink_save_button_clicks[button_id] = current_clicks
-                    date_str = session_ink_to_date[idx]
-                    handle_save_assignment(date_str, idx, inks, year, themes)
+                    date_str = session_macro_to_date[ink_identifier]
+                    handle_save_assignment(date_str, ink_identifier, inks, year, themes)
             except:
                 pass
 
@@ -801,12 +893,14 @@ def server(input, output, session):
         with reactive.isolate():
             api = api_assignments.get()
 
-        # Build reverse lookup: ink_idx -> date_str for API assignments
-        api_ink_to_date = {idx: date_str for date_str, idx in api.items()}
+        # Build reverse lookup: macro_cluster_id -> date_str for API assignments
+        api_macro_to_date = {macro_id: date_str for date_str, macro_id in api.items()}
 
-        for idx in range(len(inks)):
+        for idx, ink in enumerate(inks):
+            ink_identifier = get_ink_identifier(ink)
+
             # Only process if this ink has an API assignment
-            if idx not in api_ink_to_date:
+            if not ink_identifier or ink_identifier not in api_macro_to_date:
                 continue
 
             button_id = f"ink_api_delete_{idx}"
@@ -817,16 +911,20 @@ def server(input, output, session):
 
                 if current_clicks > prev_clicks:
                     _ink_api_delete_clicks[button_id] = current_clicks
-                    date_str = api_ink_to_date[idx]
-                    ink = inks[idx]
-                    show_api_delete_confirmation_modal(date_str, idx, ink)
+                    date_str = api_macro_to_date[ink_identifier]
+                    show_api_delete_confirmation_modal(date_str, ink_identifier, ink)
             except:
                 pass
 
-    def handle_save_assignment(date_str: str, ink_idx: int, inks, year: int, themes):
+    def handle_save_assignment(date_str: str, macro_cluster_id: str, inks, year: int, themes):
         """Handle saving a session assignment to API."""
         try:
-            ink = inks[ink_idx]
+            result = find_ink_by_macro_cluster_id(macro_cluster_id, inks)
+            if not result:
+                ui.notification_show(f"Could not find ink with macro_cluster_id {macro_cluster_id}", type="error")
+                return
+
+            _, ink = result
             ink_name = f"{ink.get('brand_name', '')} {ink.get('name', '')}"
 
             # Get API token
@@ -862,15 +960,15 @@ def server(input, output, session):
 
             if conflict:
                 # Show confirmation modal (pass fresh ink data for the save)
-                show_save_confirmation_modal(date_str, ink_idx, ink_name, conflict, new_data, ink_for_conflict_check, year)
+                show_save_confirmation_modal(date_str, macro_cluster_id, ink_name, conflict, new_data, ink_for_conflict_check, year)
             else:
                 # No conflict, save immediately (use fresh ink data)
-                perform_save(date_str, ink_idx, ink_for_conflict_check, year, new_data)
+                perform_save(date_str, macro_cluster_id, ink_for_conflict_check, year, new_data)
 
         except Exception as e:
             ui.notification_show(f"Error preparing save: {str(e)}", type="error", duration=5)
 
-    def show_save_confirmation_modal(date_str: str, ink_idx: int, ink_name: str, conflict, new_data, ink, year: int):
+    def show_save_confirmation_modal(date_str: str, macro_cluster_id: str, ink_name: str, conflict, new_data, ink, year: int):
         """Show confirmation dialog when overwriting existing data."""
         # Build comparison table
         existing_date = conflict.get("existing_date", "(none)")
@@ -922,7 +1020,7 @@ def server(input, output, session):
         # Store pending save info
         pending_save.set({
             "date_str": date_str,
-            "ink_idx": ink_idx,
+            "macro_cluster_id": macro_cluster_id,
             "ink": ink,
             "year": year,
             "new_data": new_data
@@ -938,7 +1036,7 @@ def server(input, output, session):
 
         perform_save(
             save_info["date_str"],
-            save_info["ink_idx"],
+            save_info["macro_cluster_id"],
             save_info["ink"],
             save_info["year"],
             save_info["new_data"]
@@ -982,13 +1080,15 @@ def server(input, output, session):
 
                 if current_clicks > prev_clicks:
                     _api_delete_button_clicks[button_id] = current_clicks
-                    ink_idx = api[date_str]
-                    ink = inks[ink_idx]
-                    show_api_delete_confirmation_modal(date_str, ink_idx, ink)
+                    macro_cluster_id = api[date_str]
+                    result = find_ink_by_macro_cluster_id(macro_cluster_id, inks)
+                    if result:
+                        _, ink = result
+                        show_api_delete_confirmation_modal(date_str, macro_cluster_id, ink)
             except:
                 pass
 
-    def show_api_delete_confirmation_modal(date_str: str, ink_idx: int, ink: dict):
+    def show_api_delete_confirmation_modal(date_str: str, macro_cluster_id: str, ink: dict):
         """Show confirmation dialog before deleting an API assignment."""
         ink_name = f"{ink.get('brand_name', '')} {ink.get('name', '')}"
         date_obj = datetime.strptime(date_str, "%Y-%m-%d")
@@ -1042,7 +1142,7 @@ def server(input, output, session):
         # Store pending delete info
         pending_api_delete.set({
             "date_str": date_str,
-            "ink_idx": ink_idx,
+            "macro_cluster_id": macro_cluster_id,
             "ink": ink,
             "year": year
         })
@@ -1057,7 +1157,7 @@ def server(input, output, session):
 
         perform_api_delete(
             delete_info["date_str"],
-            delete_info["ink_idx"],
+            delete_info["macro_cluster_id"],
             delete_info["ink"],
             delete_info["year"]
         )
@@ -1071,7 +1171,7 @@ def server(input, output, session):
         ui.modal_remove()
         pending_api_delete.set(None)
 
-    def perform_api_delete(date_str: str, ink_idx: int, ink: dict, year: int):
+    def perform_api_delete(date_str: str, macro_cluster_id: str, ink: dict, year: int):
         """Execute the actual API delete operation."""
         try:
             ink_name = f"{ink.get('brand_name', '')} {ink.get('name', '')}"
@@ -1107,10 +1207,15 @@ def server(input, output, session):
             update_ink_private_comment(token, fresh_ink["id"], updated_comment)
 
             # Update local ink data
-            inks = ink_data.get().copy()
-            inks[ink_idx] = {**inks[ink_idx], "private_comment": updated_comment}
-            ink_data.set(inks)
-            save_inks_to_cache(inks)
+            inks = ink_data.get()
+            result = find_ink_by_macro_cluster_id(macro_cluster_id, inks)
+            if result:
+                ink_idx, _ = result
+                updated_inks = [i.copy() for i in inks]
+                updated_inks[ink_idx]["private_comment"] = updated_comment
+                ink_data.set(updated_inks)
+                save_inks_to_cache(updated_inks)
+                inks = updated_inks
 
             # Rebuild API assignments from updated ink data
             new_api = create_explicit_assignments_only(inks, year)
@@ -1127,7 +1232,7 @@ def server(input, output, session):
                 error_msg = f"{e.response.status_code}: {e.response.text[:100]}"
             ui.notification_show(f"Error deleting: {error_msg}", type="error", duration=7)
 
-    def perform_save(date_str: str, ink_idx: int, ink, year: int, new_data):
+    def perform_save(date_str: str, macro_cluster_id: str, ink, year: int, new_data):
         """Execute the actual API save operation."""
         try:
             # Show loading notification
@@ -1159,7 +1264,7 @@ def server(input, output, session):
             # Prepare all state updates using extracted business logic
             updates = prepare_post_save_updates(
                 ink_data.get(),
-                ink_idx,
+                macro_cluster_id,
                 updated_comment,
                 date_str,
                 year,
@@ -1288,33 +1393,37 @@ def server(input, output, session):
 
         # Get all assignments
         daily = get_daily_assignments()
-        assigned_indices = set(daily.values())
+        assigned_macro_ids = set(daily.values())
 
-        # Reverse lookup for session assignments: ink_idx -> date
-        session_ink_to_date = {}
-        for d, idx in session.items():
+        # Reverse lookup for session assignments: macro_cluster_id -> date
+        session_macro_to_date = {}
+        for d, macro_id in session.items():
             if d not in api:  # Only session assignments, not API
-                session_ink_to_date[idx] = d
+                session_macro_to_date[macro_id] = d
 
         for idx, ink in enumerate(inks):
             brand = ink.get("brand_name", "Unknown")
             name = ink.get("name", "Unknown")
             color = ink.get("color", "#888888")
+            # Get properly prefixed identifier for lookups
+            ink_identifier = get_ink_identifier(ink)
+            # Raw value for HTML data attribute (JS will send back, Python handler looks up ink)
+            raw_id = ink.get("macro_cluster_id") or ink.get("id", "")
 
             # Filter by search query
             if search_query and search_query not in brand.lower() and search_query not in name.lower():
                 continue
 
-            # Check if this ink is assigned
-            is_session_assigned = idx in session_ink_to_date
-            is_api_assigned = idx in assigned_indices and not is_session_assigned
+            # Check if this ink is assigned (using prefixed identifier)
+            is_session_assigned = ink_identifier in session_macro_to_date if ink_identifier else False
+            is_api_assigned = ink_identifier in assigned_macro_ids and not is_session_assigned if ink_identifier else False
 
             # Skip API-assigned inks (they can't be moved)
             if is_api_assigned:
                 continue
 
             # Build the item
-            session_date = session_ink_to_date.get(idx)
+            session_date = session_macro_to_date.get(ink_identifier) if ink_identifier else None
             if session_date:
                 date_obj = datetime.strptime(session_date, "%Y-%m-%d")
                 date_label = ui.span(
@@ -1338,7 +1447,7 @@ def server(input, output, session):
                 class_="ink-picker-item" + (" ink-picker-item-assigned" if session_date else ""),
                 tabindex="0",
                 **{
-                    "data-ink-idx": str(idx),
+                    "data-macro-cluster-id": raw_id,
                     "data-ink-name": f"{brand} {name}"
                 }
             )
@@ -1366,7 +1475,7 @@ def server(input, output, session):
             return
 
         try:
-            ink_idx = int(input.ink_picker_select()["ink_idx"])
+            raw_id = input.ink_picker_select()["macro_cluster_id"]
         except Exception:
             return
 
@@ -1375,16 +1484,28 @@ def server(input, output, session):
         api = api_assignments.get()
         inks = ink_data.get()
 
+        # Find the ink and get its properly prefixed identifier
+        # The raw_id from JS could be a macro_cluster_id or an id
+        ink_identifier = None
+        for ink in inks:
+            if ink.get("macro_cluster_id") == raw_id or ink.get("id") == raw_id:
+                ink_identifier = get_ink_identifier(ink)
+                break
+
+        if not ink_identifier:
+            ui.notification_show(f"Could not find ink with id {raw_id}", type="warning", duration=3)
+            return
+
         # Check if this ink is already session-assigned (moving it)
-        session_ink_to_date = {idx: d for d, idx in session.items() if d not in api}
-        from_date = session_ink_to_date.get(ink_idx)
+        session_macro_to_date = {macro_id: d for d, macro_id in session.items() if d not in api}
+        from_date = session_macro_to_date.get(ink_identifier)
 
         new_session, result = move_ink_assignment(
             session=session,
             api=api,
             from_date=from_date,
             to_date=date_str,
-            ink_idx=ink_idx,
+            macro_cluster_id=ink_identifier,
             inks=inks
         )
 
@@ -1493,6 +1614,7 @@ def server(input, output, session):
             title=f"Edit Theme - {month_name}",
             easy_close=True,
             footer=ui.div(
+                ui.input_action_button("clear_theme", "Clear", class_="btn-danger") if current_theme_name else None,
                 ui.input_action_button("save_theme", "Save", class_="btn-primary"),
                 ui.input_action_button("cancel_theme", "Cancel", class_="btn-secondary"),
                 class_="modal-footer-buttons"
@@ -1533,6 +1655,24 @@ def server(input, output, session):
     def cancel_theme_handler():
         """Cancel theme editing."""
         ui.modal_remove()
+
+    @reactive.Effect
+    @reactive.event(input.clear_theme)
+    def clear_theme_handler():
+        """Clear the theme for the current month."""
+        year = input.year()
+        month = current_month.get()
+        month_key = f"{year}-{month:02d}"
+
+        # Remove theme from session themes
+        themes = session_themes.get().copy()
+        if month_key in themes:
+            del themes[month_key]
+            session_themes.set(themes)
+
+        ui.modal_remove()
+        ui.notification_show(f"Theme cleared for {datetime(year, month, 1).strftime('%B')}",
+                            type="message", duration=2)
 
     # Track previous date values for inline date pickers (use dict, not reactive)
     _prev_date_values = {}
@@ -1576,7 +1716,7 @@ def server(input, output, session):
 
                 # Check if date actually changed (not just initial render)
                 if prev_value is not None and new_date_str != date_str:
-                    # Use unified move function - it derives ink_idx from session
+                    # Use unified move function - it derives macro_cluster_id from session
                     new_session, result = move_ink_assignment(
                         session=session,
                         api=api,
@@ -1595,7 +1735,7 @@ def server(input, output, session):
                     session_assignments.set(new_session)
 
                     # Update tracking for displaced ink if any
-                    if result.data.get("displaced_ink_idx") is not None:
+                    if result.data.get("displaced_macro_cluster_id") is not None:
                         _prev_date_values[new_date_str] = None
 
                     # Update tracking for moved ink
@@ -1625,14 +1765,16 @@ def server(input, output, session):
             daily = get_daily_assignments()
             api = api_assignments.get()
             session = session_assignments.get()
-        ink_to_date = {idx: date_str for date_str, idx in daily.items()}
+        # Build reverse lookup: macro_cluster_id -> date_str
+        macro_to_date = {macro_id: date_str for date_str, macro_id in daily.items()}
 
         # PHASE 1: Read ALL inputs to establish reactive dependencies
         input_values = {}
         remove_clicks = {}
-        for idx in range(len(inks)):
+        for idx, ink in enumerate(inks):
             try:
-                current_date = ink_to_date.get(idx)
+                ink_identifier = get_ink_identifier(ink)
+                current_date = macro_to_date.get(ink_identifier) if ink_identifier else None
                 if current_date and current_date in api:
                     continue
                 date_input_id = f"ink_date_{idx}"
@@ -1644,8 +1786,11 @@ def server(input, output, session):
 
         # PHASE 2: Process changes (only handle first change found)
         change_processed = False
-        for idx in range(len(inks)):
-            current_date = ink_to_date.get(idx)
+        for idx, ink in enumerate(inks):
+            ink_identifier = get_ink_identifier(ink)
+            if not ink_identifier:
+                continue
+            current_date = macro_to_date.get(ink_identifier)
             if current_date and current_date in api:
                 continue
 
@@ -1655,7 +1800,7 @@ def server(input, output, session):
                 prev_remove_clicks = _ink_collection_remove_clicks.get(idx, 0)
                 if not change_processed and current_date and current_remove_clicks > prev_remove_clicks:
                     _ink_collection_remove_clicks[idx] = current_remove_clicks
-                    # Unassign - function derives ink_idx from session
+                    # Unassign - function derives macro_cluster_id from session
                     new_session, result = move_ink_assignment(
                         session=session,
                         api=api,
@@ -1708,13 +1853,13 @@ def server(input, output, session):
 
                 if not change_processed and (is_new_assignment or is_date_change):
                     # Use unified move function (handles assign, move, and validation)
-                    # Pass ink_idx for new assignments (current_date=None), otherwise derived
+                    # Pass ink_identifier for new assignments (current_date=None), otherwise derived
                     new_session, result = move_ink_assignment(
                         session=session,
                         api=api,
                         from_date=current_date,  # None for new assignment
                         to_date=new_date_str,
-                        ink_idx=idx if current_date is None else None,
+                        macro_cluster_id=ink_identifier if current_date is None else None,
                         inks=inks
                     )
 
@@ -1724,8 +1869,13 @@ def server(input, output, session):
                         continue
 
                     # Update tracking for displaced ink if any
-                    if result.data.get("displaced_ink_idx") is not None:
-                        _ink_collection_prev_dates[result.data["displaced_ink_idx"]] = None
+                    if result.data.get("displaced_macro_cluster_id") is not None:
+                        # Find the idx of the displaced ink and reset its tracking
+                        displaced_id = result.data["displaced_macro_cluster_id"]
+                        for d_idx, d_ink in enumerate(inks):
+                            if get_ink_identifier(d_ink) == displaced_id:
+                                _ink_collection_prev_dates[d_idx] = None
+                                break
 
                     session_assignments.set(new_session)
                     ink_name = result.data.get("ink_name", "ink")
@@ -1789,8 +1939,44 @@ def server(input, output, session):
             api_assignments=api_assignments.get(),
             year=input.year(),
             search_query=input.ink_search() or "",
-            ink_swatch_fn=ink_swatch_svg
+            status_filter=input.ink_filter() or [],
+            ink_swatch_fn=ink_swatch_svg,
+            sort_field=collection_sort_field.get(),
+            sort_direction=collection_sort_direction.get()
         )
+
+    # Sort column click handlers for collection view
+    @reactive.Effect
+    @reactive.event(input.sort_color)
+    def handle_sort_color():
+        _toggle_sort("color")
+
+    @reactive.Effect
+    @reactive.event(input.sort_brand)
+    def handle_sort_brand():
+        _toggle_sort("brand")
+
+    @reactive.Effect
+    @reactive.event(input.sort_name)
+    def handle_sort_name():
+        _toggle_sort("name")
+
+    @reactive.Effect
+    @reactive.event(input.sort_date)
+    def handle_sort_date():
+        _toggle_sort("date")
+
+    def _toggle_sort(field: str):
+        """Toggle sort direction if same field, else switch to new field ascending."""
+        current_field = collection_sort_field.get()
+        if current_field == field:
+            # Toggle direction
+            current_dir = collection_sort_direction.get()
+            collection_sort_direction.set("desc" if current_dir == "asc" else "asc")
+        else:
+            # New field, start ascending
+            collection_sort_field.set(field)
+            collection_sort_direction.set("asc")
     
     # Month assignment table
     @output

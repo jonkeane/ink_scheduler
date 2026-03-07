@@ -9,6 +9,7 @@ from calendar import monthrange
 from shiny import ui
 
 from app_helpers import get_month_dates, make_button_id, prepare_month_cells
+from assignment_logic import find_ink_by_macro_cluster_id, normalize_apostrophes, parse_ink_identifier
 
 
 # =============================================================================
@@ -65,7 +66,7 @@ def render_calendar_view(
 
     Args:
         inks: List of ink dictionaries
-        daily_assignments: Merged assignments {date_str: ink_idx}
+        daily_assignments: Merged assignments {date_str: macro_cluster_id}
         session_assignments: Session-only assignments
         api_assignments: API assignments (protected)
         year: Year to display
@@ -95,12 +96,13 @@ def render_calendar_view(
 
     for day in range(1, num_days + 1):
         date_str = f"{year}-{month:02d}-{day:02d}"
-        ink_idx = daily_assignments.get(date_str)
+        macro_cluster_id = daily_assignments.get(date_str)
 
-        if ink_idx is not None and ink_idx < len(inks):
-            ink = inks[ink_idx]
+        result = find_ink_by_macro_cluster_id(macro_cluster_id, inks) if macro_cluster_id else None
+        if result:
+            ink_idx, ink = result
             cell_content = _render_calendar_cell_with_ink(
-                date_str, day, ink, ink_idx,
+                date_str, day, ink, macro_cluster_id,
                 session_assignments, api_assignments,
                 ink_swatch_fn
             )
@@ -127,7 +129,7 @@ def _render_calendar_cell_with_ink(
     date_str: str,
     day: int,
     ink: dict,
-    ink_idx: int,
+    macro_cluster_id: str,
     session_assignments: dict,
     api_assignments: dict,
     ink_swatch_fn
@@ -136,15 +138,15 @@ def _render_calendar_cell_with_ink(
     ink_name = ink.get("name", "Unknown")
     brand = ink.get("brand_name", "")
     ink_color = ink.get("color", "#cccccc")
-    macro_cluster_id = ink.get("macro_cluster_id")
 
     is_session = date_str in session_assignments and date_str not in api_assignments
     is_protected = date_str in api_assignments
 
-    # Build ink name element with optional FPC link
-    if macro_cluster_id:
+    # Build ink name element with optional FPC link (only for macro: identifiers)
+    id_type, id_value = parse_ink_identifier(macro_cluster_id) if macro_cluster_id else ("", "")
+    if id_type == "macro" and id_value:
         fpc_link_icon = ui.HTML(FPC_LINK_SVG)
-        fpc_url = f"{FPC_CLUSTER_URL}/{macro_cluster_id}"
+        fpc_url = f"{FPC_CLUSTER_URL}/{id_value}"
         ink_name_element = ui.span(
             ui.span(ink_name),
             ui.tags.a(
@@ -174,7 +176,7 @@ def _render_calendar_cell_with_ink(
     # Build data attributes for drag-and-drop
     data_attrs = {
         "data-date": date_str,
-        "data-ink-idx": str(ink_idx),
+        "data-macro-cluster-id": macro_cluster_id,
     }
     if is_protected:
         data_attrs["data-protected"] = "true"
@@ -230,7 +232,7 @@ def render_list_view(
 
     Args:
         inks: List of ink dictionaries
-        daily_assignments: Merged assignments {date_str: ink_idx}
+        daily_assignments: Merged assignments {date_str: macro_cluster_id}
         session_assignments: Session-only assignments
         api_assignments: API assignments (protected)
         year: Year to display
@@ -259,17 +261,19 @@ def render_list_view(
     for day in range(1, num_days + 1):
         date_str = f"{year}-{month:02d}-{day:02d}"
         date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-        ink_idx = daily_assignments.get(date_str)
+        macro_cluster_id = daily_assignments.get(date_str)
 
         date_col = ui.div(
             ui.strong(date_obj.strftime("%a, %b %d")),
             class_="list-date-col"
         )
 
-        if ink_idx is not None and ink_idx < len(inks):
+        result = find_ink_by_macro_cluster_id(macro_cluster_id, inks) if macro_cluster_id else None
+        if result:
+            _, ink = result
             row = _render_list_row_with_ink(
                 date_str, date_obj, date_col,
-                inks[ink_idx], ink_idx,
+                ink, macro_cluster_id,
                 session_assignments, api_assignments,
                 ink_swatch_fn
             )
@@ -287,7 +291,7 @@ def _render_list_row_with_ink(
     date_obj,
     date_col,
     ink: dict,
-    ink_idx: int,
+    macro_cluster_id: str,
     session_assignments: dict,
     api_assignments: dict,
     ink_swatch_fn
@@ -296,7 +300,6 @@ def _render_list_row_with_ink(
     color = ink.get("color", "#888888")
     brand = ink.get("brand_name", "Unknown")
     name = ink.get("name", "Unknown")
-    macro_cluster_id = ink.get("macro_cluster_id")
 
     can_edit = date_str in session_assignments and date_str not in api_assignments
     is_api = date_str in api_assignments
@@ -304,10 +307,11 @@ def _render_list_row_with_ink(
     swatch = ink_swatch_fn(color, "sm")
     brand_col = ui.div(brand, class_="list-brand-col")
 
-    # Build name column with optional FPC link
-    if macro_cluster_id:
+    # Build name column with optional FPC link (only for macro: identifiers)
+    id_type, id_value = parse_ink_identifier(macro_cluster_id) if macro_cluster_id else ("", "")
+    if id_type == "macro" and id_value:
         fpc_link_icon = ui.HTML(FPC_LINK_SVG)
-        fpc_url = f"{FPC_CLUSTER_URL}/{macro_cluster_id}"
+        fpc_url = f"{FPC_CLUSTER_URL}/{id_value}"
         name_col = ui.div(
             ui.span(name),
             ui.tags.a(
@@ -401,19 +405,25 @@ def render_ink_collection_view(
     api_assignments: dict,
     year: int,
     search_query: str,
-    ink_swatch_fn
+    status_filter: list[str],
+    ink_swatch_fn,
+    sort_field: str = "brand",
+    sort_direction: str = "asc"
 ):
     """
     Render the ink collection view with search and inline assignment.
 
     Args:
         inks: List of ink dictionaries
-        daily_assignments: Merged assignments {date_str: ink_idx}
+        daily_assignments: Merged assignments {date_str: macro_cluster_id}
         session_assignments: Session-only assignments
         api_assignments: API assignments (protected)
         year: Year for assignments
         search_query: Search filter string
+        status_filter: List of statuses to show: "unassigned", "session", "api"
         ink_swatch_fn: Function to render ink swatch SVG
+        sort_field: Field to sort by ("color", "brand", "name", "date")
+        sort_direction: Sort direction ("asc" or "desc")
 
     Returns:
         Shiny UI element with ink collection table
@@ -421,45 +431,120 @@ def render_ink_collection_view(
     if not inks:
         return ui.p("No inks loaded. Please fetch your collection first.")
 
-    # Build reverse lookup: ink_idx -> assigned_date
-    ink_to_date = {idx: date_str for date_str, idx in daily_assignments.items()}
+    # Build reverse lookup: macro_cluster_id -> assigned_date
+    macro_id_to_date = {macro_id: date_str for date_str, macro_id in daily_assignments.items()}
 
-    # Filter inks by search query
-    query_lower = search_query.lower() if search_query else ""
+    # Build session macro_id lookup (session-only, not API)
+    session_macro_ids = set()
+    for date_str, macro_id in session_assignments.items():
+        if date_str not in api_assignments:
+            session_macro_ids.add(macro_id)
+
+    # Filter inks by search query and status
+    # Normalize apostrophes for consistency with LLM-generated queries
+    query_lower = normalize_apostrophes(search_query).lower() if search_query else ""
     filtered_indices = []
     for idx, ink in enumerate(inks):
+        # Search filter
         if query_lower:
-            name = ink.get("name", "").lower()
-            brand = ink.get("brand_name", "").lower()
+            name = normalize_apostrophes(ink.get("name", "")).lower()
+            brand = normalize_apostrophes(ink.get("brand_name", "")).lower()
             if query_lower not in name and query_lower not in brand:
                 continue
+
+        # Status filter - determine ink's status
+        if ink.get("macro_cluster_id"):
+            ink_identifier = f"macro:{ink['macro_cluster_id']}"
+        else:
+            ink_identifier = f"id:{ink.get('id', '')}"
+
+        current_date = macro_id_to_date.get(ink_identifier)
+        is_session = ink_identifier in session_macro_ids
+        is_api = current_date and current_date in api_assignments
+
+        # Determine status category
+        if is_api:
+            status = "api"
+        elif is_session:
+            status = "session"
+        else:
+            status = "unassigned"
+
+        # Apply status filter
+        if status not in status_filter:
+            continue
+
         filtered_indices.append(idx)
 
-    # Table header
+    # Sort filtered indices
+    def get_sort_key(idx: int):
+        ink = inks[idx]
+        if sort_field == "color":
+            # Sort by hex color value
+            return ink.get("color", "#ffffff").lower()
+        elif sort_field == "brand":
+            return ink.get("brand_name", "").lower()
+        elif sort_field == "name":
+            return ink.get("name", "").lower()
+        elif sort_field == "date":
+            # Get assigned date for this ink
+            if ink.get("macro_cluster_id"):
+                ink_id = f"macro:{ink['macro_cluster_id']}"
+            else:
+                ink_id = f"id:{ink.get('id', '')}"
+            assigned_date = macro_id_to_date.get(ink_id, "")
+            # Unassigned inks sort last (or first if desc)
+            return assigned_date if assigned_date else ("9999" if sort_direction == "asc" else "0000")
+        return ""
+
+    filtered_indices.sort(key=get_sort_key, reverse=(sort_direction == "desc"))
+
+    # Table header with sortable columns
+    def sort_indicator(field: str) -> str:
+        if sort_field != field:
+            return ""  # Hide arrow when not active
+        return " \u25B2" if sort_direction == "asc" else " \u25BC"
+
     header_row = ui.div(
-        ui.div("Color", class_="ink-col-color"),
-        ui.div("Brand", class_="ink-col-brand"),
-        ui.div("Name", class_="ink-col-name"),
+        ui.input_action_button(
+            "sort_color", f"Color{sort_indicator('color')}",
+            class_="ink-col-color ink-sort-header"
+        ),
+        ui.input_action_button(
+            "sort_brand", f"Brand{sort_indicator('brand')}",
+            class_="ink-col-brand ink-sort-header"
+        ),
+        ui.input_action_button(
+            "sort_name", f"Name{sort_indicator('name')}",
+            class_="ink-col-name ink-sort-header"
+        ),
         ui.div("Actions", class_="ink-col-actions"),
-        ui.div("Date", class_="ink-col-date"),
+        ui.input_action_button(
+            "sort_date", f"Date{sort_indicator('date')}",
+            class_="ink-col-date ink-sort-header"
+        ),
         class_="ink-header-row"
     )
 
     rows = []
     for idx in filtered_indices:
         ink = inks[idx]
-        current_date = ink_to_date.get(idx)
+        if ink.get("macro_cluster_id"):
+            ink_identifier = f"macro:{ink['macro_cluster_id']}"
+        else:
+            ink_identifier = f"id:{ink.get('id', '')}"
+        current_date = macro_id_to_date.get(ink_identifier)
         is_api_assigned = current_date and current_date in api_assignments
 
         row = _render_ink_collection_row(
-            idx, ink, current_date, is_api_assigned,
+            idx, ink, ink_identifier, current_date, is_api_assigned,
             session_assignments, api_assignments,
             ink_swatch_fn
         )
         rows.append(row)
 
     if not rows:
-        rows = [ui.div(ui.p("No inks match your search."), class_="ink-no-results")]
+        rows = [ui.div(ui.p("No inks match your filters."), class_="ink-no-results")]
 
     table_content = ui.div(*rows, class_="ink-table-content")
     return ui.div(header_row, table_content, class_="ink-collection-table")
@@ -468,6 +553,7 @@ def render_ink_collection_view(
 def _render_ink_collection_row(
     idx: int,
     ink: dict,
+    macro_cluster_id: str,
     current_date: str,
     is_api_assigned: bool,
     session_assignments: dict,

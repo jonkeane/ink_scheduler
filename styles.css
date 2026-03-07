@@ -70,6 +70,7 @@ input#year.form-control:focus {
 /* Month/year container */
 .month-year-container {
     width: 12rem;
+    flex-shrink: 0;
     display: flex;
     justify-content: center;
     align-items: baseline;
@@ -120,12 +121,43 @@ input#year.form-control:focus {
 /* Navigation controls */
 .nav-controls {
     display: flex;
-    align-items: baseline;
-    gap: 8px;
+    align-items: flex-start;
+    gap: 15px;
     margin-top: 15px;
 }
-.nav-btn-prev {
-    margin-left: 20px;
+
+/* Left side: two rows - nav and buttons */
+.nav-left {
+    display: flex;
+    flex-direction: column;
+    padding-bottom: 6px;
+    flex-shrink: 0;
+}
+
+.nav-left-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Fixed-width container for view mode switch */
+.nav-left-row > .form-check.form-switch {
+    width: 100px;
+    flex-shrink: 0;
+}
+
+/* Nav arrow buttons */
+.nav-left-row .btn-sm {
+    height: 32px;
+    min-width: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Buttons row - left aligned */
+.nav-left-buttons {
+    margin-left: 0;
 }
 
 /* Month label */
@@ -136,9 +168,18 @@ input#year.form-control:focus {
 
 /* Theme label */
 .theme-container {
-    margin-left: 15px;
+    flex: 1;
+    min-width: 0;
     padding-left: 15px;
     border-left: 2px solid #ddd;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+.theme-text {
+    flex: 1;
+    min-width: 0;
+    line-height: 1.4;
 }
 .theme-name {
     color: #555;
@@ -154,7 +195,7 @@ input#year.form-control:focus {
 /* Theme editing UI */
 .theme-edit-btn,
 .theme-set-btn {
-    margin-left: 8px;
+    flex-shrink: 0;
     padding: 2px 8px;
     font-size: 0.8em;
     border: 1px solid #ccc;
@@ -180,9 +221,19 @@ input#year.form-control:focus {
     color: #666;
 }
 
+/* Shuffle Month button */
+.shuffle-month-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.shuffle-month-btn svg {
+    vertical-align: middle;
+}
+
 /* Save All Month button */
 .save-all-month-btn {
-    margin-left: 8px;
     display: inline-flex;
     align-items: center;
     gap: 4px;
@@ -196,6 +247,10 @@ input#year.form-control:focus {
     display: flex;
     gap: 8px;
     justify-content: flex-end;
+}
+
+.modal-footer-buttons .btn-danger {
+    margin-right: auto;
 }
 
 /* Calendar grid */
@@ -480,10 +535,10 @@ input#year.form-control:focus {
 
 /* Ink collection header columns */
 .ink-col-color {
-    width: 50px;
+    width: 60px;
 }
 .ink-col-brand {
-    width: 160px;
+    width: 170px;
 }
 .ink-col-name {
     flex: 1;
@@ -500,11 +555,11 @@ input#year.form-control:focus {
 
 /* Ink collection data columns */
 .ink-swatch-col {
-    width: 50px;
+    width: 60px;
     flex-shrink: 0;
 }
 .ink-brand-col {
-    width: 160px;
+    width: 170px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -786,4 +841,70 @@ input#year.form-control:focus {
 
 .cancel-chat-btn:not(:disabled):hover {
     background-color: #c82333;
+}
+
+/* Ink collection filter controls */
+.ink-filter-controls {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    margin-bottom: 15px;
+    flex-wrap: wrap;
+}
+
+.ink-filter-controls .form-group {
+    margin-bottom: 0;
+}
+
+.ink-filter-controls #ink_search {
+    width: 250px;
+}
+
+.ink-filter-controls .shiny-input-checkboxgroup {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.ink-filter-controls .shiny-input-checkboxgroup > label:first-child {
+    font-weight: 600;
+    margin-right: 8px;
+    margin-bottom: 0;
+}
+
+.ink-filter-controls .shiny-options-group {
+    display: flex;
+    gap: 12px;
+}
+
+.ink-filter-controls .checkbox-inline {
+    margin: 0;
+    padding-left: 20px;
+}
+
+/* Sortable column headers */
+.ink-sort-header {
+    background: transparent;
+    border: none;
+    font-weight: bold;
+    padding: 0;
+    margin: 0;
+    text-align: left;
+    cursor: pointer;
+    color: #333;
+    transition: color 0.15s;
+    white-space: nowrap;
+}
+.ink-sort-header:hover {
+    color: #007bff;
+    background: transparent;
+}
+.ink-sort-header:focus {
+    outline: none;
+    box-shadow: none;
+    background: transparent;
+}
+.ink-col-date .ink-sort-header {
+    text-align: right;
+    width: 100%;
 }

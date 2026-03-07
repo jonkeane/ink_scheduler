@@ -8,7 +8,11 @@ from calendar import monthrange
 from datetime import datetime
 from typing import NamedTuple, Optional
 
-from assignment_logic import create_explicit_assignments_only, parse_theme_from_comment
+from assignment_logic import (
+    create_explicit_assignments_only,
+    parse_theme_from_comment,
+    find_ink_by_macro_cluster_id,
+)
 
 
 # =============================================================================
@@ -69,7 +73,7 @@ class CellData(NamedTuple):
     date_str: str
     day: int
     has_ink: bool
-    ink_idx: Optional[int]
+    macro_cluster_id: Optional[str]
     ink_name: str
     ink_brand: str
     ink_color: str
@@ -92,23 +96,24 @@ def prepare_cell_data(
         date_str: Date in YYYY-MM-DD format
         day: Day number (1-31)
         inks: List of ink dictionaries
-        daily_assignments: Merged assignments {date_str: ink_idx}
+        daily_assignments: Merged assignments {date_str: macro_cluster_id}
         session_assignments: Session-only assignments
         api_assignments: API-only assignments (protected)
 
     Returns:
         CellData with all info needed to render the cell
     """
-    ink_idx = daily_assignments.get(date_str)
-    has_ink = ink_idx is not None and ink_idx < len(inks)
+    macro_cluster_id = daily_assignments.get(date_str)
+    result = find_ink_by_macro_cluster_id(macro_cluster_id, inks) if macro_cluster_id else None
+    has_ink = result is not None
 
     if has_ink:
-        ink = inks[ink_idx]
+        _, ink = result
         return CellData(
             date_str=date_str,
             day=day,
             has_ink=True,
-            ink_idx=ink_idx,
+            macro_cluster_id=macro_cluster_id,
             ink_name=ink.get("name", "Unknown"),
             ink_brand=ink.get("brand_name", ""),
             ink_color=ink.get("color", "#cccccc"),
@@ -120,7 +125,7 @@ def prepare_cell_data(
             date_str=date_str,
             day=day,
             has_ink=False,
-            ink_idx=None,
+            macro_cluster_id=None,
             ink_name="",
             ink_brand="",
             ink_color="",
@@ -285,7 +290,7 @@ def get_month_theme(
         month: Month number (1-12)
         session_themes: Dict of {month_key: {theme, description}}
         inks: List of ink dictionaries
-        daily_assignments: Dict of {date_str: ink_idx}
+        daily_assignments: Dict of {date_str: macro_cluster_id}
 
     Returns:
         ThemeInfo with theme, description, and source
@@ -305,12 +310,16 @@ def get_month_theme(
         return ThemeInfo("", "", "none")
 
     first_day_str = f"{year}-{month:02d}-01"
-    first_day_ink_idx = daily_assignments.get(first_day_str)
+    first_day_macro_id = daily_assignments.get(first_day_str)
 
-    if first_day_ink_idx is None or first_day_ink_idx >= len(inks):
+    if not first_day_macro_id:
         return ThemeInfo("", "", "none")
 
-    first_day_ink = inks[first_day_ink_idx]
+    result = find_ink_by_macro_cluster_id(first_day_macro_id, inks)
+    if not result:
+        return ThemeInfo("", "", "none")
+
+    _, first_day_ink = result
     private_comment = first_day_ink.get("private_comment", "")
     theme_info = parse_theme_from_comment(private_comment, year)
 
@@ -369,7 +378,7 @@ class PostSaveUpdates(NamedTuple):
 
 def prepare_post_save_updates(
     inks: list[dict],
-    ink_idx: int,
+    macro_cluster_id: str,
     updated_comment: str,
     date_str: str,
     year: int,
@@ -385,7 +394,7 @@ def prepare_post_save_updates(
 
     Args:
         inks: Current ink list
-        ink_idx: Index of saved ink
+        macro_cluster_id: Macro cluster ID of saved ink
         updated_comment: New comment from API
         date_str: Date that was saved
         year: Year for assignment parsing
@@ -396,7 +405,12 @@ def prepare_post_save_updates(
     """
     # 1. Update local ink data (create new list to avoid mutation)
     updated_inks = [ink.copy() for ink in inks]
-    updated_inks[ink_idx]["private_comment"] = updated_comment
+
+    # Find the ink by macro_cluster_id and update it
+    result = find_ink_by_macro_cluster_id(macro_cluster_id, inks)
+    if result:
+        ink_idx, _ = result
+        updated_inks[ink_idx]["private_comment"] = updated_comment
 
     # 2. Re-parse API assignments
     new_api_assignments = create_explicit_assignments_only(updated_inks, year)

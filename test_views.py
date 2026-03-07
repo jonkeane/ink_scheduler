@@ -31,9 +31,9 @@ def mock_ink_swatch_fn(color: str, size: str = "sm"):
 def sample_inks():
     """Sample ink collection for testing."""
     return [
-        {"name": "Kon-Peki", "brand_name": "Iroshizuku", "color": "#007BA7"},
-        {"name": "Oxblood", "brand_name": "Diamine", "color": "#800020"},
-        {"name": "Apache Sunset", "brand_name": "Noodler's", "color": "#FF6600"},
+        {"name": "Kon-Peki", "brand_name": "Iroshizuku", "color": "#007BA7", "macro_cluster_id": "macro_0"},
+        {"name": "Oxblood", "brand_name": "Diamine", "color": "#800020", "macro_cluster_id": "macro_1"},
+        {"name": "Apache Sunset", "brand_name": "Noodler's", "color": "#FF6600", "macro_cluster_id": "macro_2"},
     ]
 
 
@@ -41,8 +41,8 @@ def sample_inks():
 def sample_assignments():
     """Sample assignments for January 2026."""
     return {
-        "2026-01-01": 0,  # Kon-Peki
-        "2026-01-15": 1,  # Oxblood
+        "2026-01-01": "macro:macro_0",  # Kon-Peki
+        "2026-01-15": "macro:macro_1",  # Oxblood
     }
 
 
@@ -335,6 +335,7 @@ class TestRenderInkCollectionView:
             api_assignments={},
             year=2026,
             search_query="",
+            status_filter=["unassigned", "session", "api"],
             ink_swatch_fn=mock_ink_swatch_fn
         )
         html = str(result)
@@ -349,6 +350,7 @@ class TestRenderInkCollectionView:
             api_assignments={},
             year=2026,
             search_query="",
+            status_filter=["unassigned", "session", "api"],
             ink_swatch_fn=mock_ink_swatch_fn
         )
         html = str(result)
@@ -365,6 +367,7 @@ class TestRenderInkCollectionView:
             api_assignments={},
             year=2026,
             search_query="Kon",
+            status_filter=["unassigned", "session", "api"],
             ink_swatch_fn=mock_ink_swatch_fn
         )
         html = str(result)
@@ -380,6 +383,7 @@ class TestRenderInkCollectionView:
             api_assignments={},
             year=2026,
             search_query="Diamine",
+            status_filter=["unassigned", "session", "api"],
             ink_swatch_fn=mock_ink_swatch_fn
         )
         html = str(result)
@@ -395,6 +399,7 @@ class TestRenderInkCollectionView:
             api_assignments={},
             year=2026,
             search_query="KON-PEKI",
+            status_filter=["unassigned", "session", "api"],
             ink_swatch_fn=mock_ink_swatch_fn
         )
         html = str(result)
@@ -409,14 +414,15 @@ class TestRenderInkCollectionView:
             api_assignments={},
             year=2026,
             search_query="nonexistent",
+            status_filter=["unassigned", "session", "api"],
             ink_swatch_fn=mock_ink_swatch_fn
         )
         html = str(result)
-        assert "No inks match your search" in html
+        assert "No inks match your filters" in html
 
     def test_assigned_ink_shows_date(self, sample_inks):
         """Assigned inks should show their assignment date."""
-        assignments = {"2026-01-15": 0}  # Kon-Peki assigned to Jan 15
+        assignments = {"2026-01-15": "macro:macro_0"}  # Kon-Peki assigned to Jan 15
         result = render_ink_collection_view(
             inks=sample_inks,
             daily_assignments=assignments,
@@ -424,6 +430,7 @@ class TestRenderInkCollectionView:
             api_assignments={},
             year=2026,
             search_query="",
+            status_filter=["unassigned", "session", "api"],
             ink_swatch_fn=mock_ink_swatch_fn
         )
         html = str(result)
@@ -432,7 +439,7 @@ class TestRenderInkCollectionView:
 
     def test_api_assigned_ink_shows_swatched(self, sample_inks):
         """API-assigned inks should show 'swatched' badge."""
-        assignments = {"2026-01-15": 0}
+        assignments = {"2026-01-15": "macro:macro_0"}
         result = render_ink_collection_view(
             inks=sample_inks,
             daily_assignments=assignments,
@@ -440,6 +447,7 @@ class TestRenderInkCollectionView:
             api_assignments=assignments,
             year=2026,
             search_query="",
+            status_filter=["unassigned", "session", "api"],
             ink_swatch_fn=mock_ink_swatch_fn
         )
         html = str(result)
@@ -455,6 +463,7 @@ class TestRenderInkCollectionView:
             api_assignments={},
             year=2026,
             search_query="",
+            status_filter=["unassigned", "session", "api"],
             ink_swatch_fn=mock_ink_swatch_fn
         )
         html = str(result)
@@ -528,7 +537,7 @@ class TestRenderMonthAssignmentSummary:
     def test_calculates_coverage_percentage(self, sample_inks):
         """Should calculate coverage percentage correctly."""
         # Assign all 31 days of January
-        full_january = {f"2026-01-{d:02d}": 0 for d in range(1, 32)}
+        full_january = {f"2026-01-{d:02d}": "macro:macro_0" for d in range(1, 32)}
         result = render_month_assignment_summary(
             inks=sample_inks,
             daily_assignments=full_january,
@@ -548,12 +557,12 @@ class TestEdgeCases:
     def test_ink_with_missing_fields(self):
         """Should handle inks with missing fields gracefully."""
         incomplete_inks = [
-            {"name": "TestInk"},  # Missing brand_name and color
+            {"name": "TestInk", "macro_cluster_id": "test_0"},  # Missing brand_name and color
         ]
         result = render_calendar_view(
             inks=incomplete_inks,
-            daily_assignments={"2026-01-01": 0},
-            session_assignments={"2026-01-01": 0},
+            daily_assignments={"2026-01-01": "macro:test_0"},
+            session_assignments={"2026-01-01": "macro:test_0"},
             api_assignments={},
             year=2026,
             month=1,
@@ -563,8 +572,8 @@ class TestEdgeCases:
         assert "TestInk" in html
 
     def test_assignment_with_invalid_ink_index(self, sample_inks):
-        """Should handle assignment with out-of-bounds ink index."""
-        invalid_assignments = {"2026-01-01": 999}  # Index doesn't exist
+        """Should handle assignment with non-existent macro_cluster_id."""
+        invalid_assignments = {"2026-01-01": "macro:nonexistent"}  # macro_cluster_id doesn't exist
         result = render_calendar_view(
             inks=sample_inks,
             daily_assignments=invalid_assignments,

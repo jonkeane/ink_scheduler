@@ -4,6 +4,76 @@ Core ink assignment logic - pure functions for easy testing
 from datetime import datetime
 from typing import List, Dict, Optional
 import json
+import random
+
+
+def normalize_apostrophes(text: str) -> str:
+    """
+    Normalize various Unicode punctuation to standard ASCII equivalents.
+
+    LLMs often return "smart" punctuation instead of ASCII characters:
+    - Curly apostrophes (' ') instead of straight (')
+    - En/em dashes (– —) instead of hyphens (-)
+    - Smart quotes (" ") instead of straight (")
+    - Non-breaking spaces instead of regular spaces
+
+    This causes ink names like "Cat's Eye Nebula" or "Kon-peki" to fail
+    matching when the database uses ASCII but the LLM returns Unicode.
+
+    Args:
+        text: Input string that may contain various Unicode punctuation
+
+    Returns:
+        String with Unicode punctuation normalized to ASCII equivalents
+    """
+    # Apostrophe-like characters -> ASCII apostrophe
+    apostrophe_chars = [
+        '\u2019',  # ' RIGHT SINGLE QUOTATION MARK (most common from LLMs)
+        '\u2018',  # ' LEFT SINGLE QUOTATION MARK
+        '\u02BC',  # ʼ MODIFIER LETTER APOSTROPHE
+        '\u02BB',  # ʻ MODIFIER LETTER TURNED COMMA
+        '\u2032',  # ′ PRIME
+        '\u0060',  # ` GRAVE ACCENT
+        '\u00B4',  # ´ ACUTE ACCENT
+    ]
+    for char in apostrophe_chars:
+        text = text.replace(char, "'")
+
+    # Dash-like characters -> ASCII hyphen-minus
+    dash_chars = [
+        '\u2013',  # – EN DASH
+        '\u2014',  # — EM DASH
+        '\u2212',  # − MINUS SIGN
+        '\u2010',  # ‐ HYPHEN
+        '\u2011',  # ‑ NON-BREAKING HYPHEN
+        '\u2012',  # ‒ FIGURE DASH
+        '\u2015',  # ― HORIZONTAL BAR
+    ]
+    for char in dash_chars:
+        text = text.replace(char, "-")
+
+    # Double quote characters -> ASCII double quote
+    double_quote_chars = [
+        '\u201C',  # " LEFT DOUBLE QUOTATION MARK
+        '\u201D',  # " RIGHT DOUBLE QUOTATION MARK
+        '\u201E',  # „ DOUBLE LOW-9 QUOTATION MARK
+        '\u201F',  # ‟ DOUBLE HIGH-REVERSED-9 QUOTATION MARK
+    ]
+    for char in double_quote_chars:
+        text = text.replace(char, '"')
+
+    # Space-like characters -> ASCII space
+    space_chars = [
+        '\u00A0',  # NO-BREAK SPACE
+        '\u2002',  # EN SPACE
+        '\u2003',  # EM SPACE
+        '\u2009',  # THIN SPACE
+        '\u200A',  # HAIR SPACE
+    ]
+    for char in space_chars:
+        text = text.replace(char, ' ')
+
+    return text
 
 
 def extract_ink_info(ink: dict, idx: int) -> dict:
@@ -22,6 +92,7 @@ def extract_ink_info(ink: dict, idx: int) -> dict:
     """
     return {
         "index": idx,
+        "macro_cluster_id": ink.get("macro_cluster_id", ""),
         "brand": ink.get("brand_name", "Unknown"),
         "name": ink.get("name", "Unknown"),
         "ink_cluster_tags": ink.get("cluster_tags", []),
@@ -33,6 +104,99 @@ def extract_ink_info(ink: dict, idx: int) -> dict:
         "last_used_on": ink.get("last_used_on", ""),
         "comment": ink.get("comment", ""),
     }
+
+
+def get_ink_identifier(ink: Dict) -> Optional[str]:
+    """
+    Get the best stable identifier for an ink, with type prefix.
+
+    Prefers macro_cluster_id (prefixed "macro:"), falls back to ink id (prefixed "id:").
+    The prefix ensures no collision between the two namespaces.
+
+    Args:
+        ink: Ink dictionary
+
+    Returns:
+        Prefixed identifier string (e.g., "macro:12345" or "id:674158"), or None if neither available
+    """
+    macro_id = ink.get("macro_cluster_id")
+    if macro_id:
+        return f"macro:{macro_id}"
+    ink_id = ink.get("id")
+    if ink_id:
+        return f"id:{ink_id}"
+    return None
+
+
+def parse_ink_identifier(identifier: str) -> tuple[str, str]:
+    """
+    Parse a prefixed ink identifier into (type, value).
+
+    Args:
+        identifier: Prefixed identifier like "macro:12345" or "id:674158"
+
+    Returns:
+        (type, value) tuple, e.g., ("macro", "12345") or ("id", "674158")
+        Returns ("", "") for empty or invalid identifiers
+    """
+    if not identifier or ":" not in identifier:
+        return ("", "")
+    prefix, value = identifier.split(":", 1)
+    return (prefix, value)
+
+
+def build_macro_cluster_lookup(inks: List[Dict]) -> Dict[str, Dict]:
+    """
+    Build a lookup dictionary from macro_cluster_id to ink dictionary.
+
+    For inks with the same macro_cluster_id (e.g., bottle and sample of same ink),
+    this returns the first one found. Use find_ink_by_macro_cluster_id() if you
+    need the index as well.
+
+    Args:
+        inks: List of ink dictionaries
+
+    Returns:
+        Dictionary mapping macro_cluster_id to ink dict
+    """
+    lookup = {}
+    for ink in inks:
+        macro_id = ink.get("macro_cluster_id")
+        if macro_id and macro_id not in lookup:
+            lookup[macro_id] = ink
+    return lookup
+
+
+def find_ink_by_identifier(identifier: str, inks: List[Dict]) -> Optional[tuple]:
+    """
+    Find an ink by its prefixed identifier.
+
+    Args:
+        identifier: Prefixed identifier like "macro:12345" or "id:674158"
+        inks: List of ink dictionaries
+
+    Returns:
+        (index, ink) tuple if found, None otherwise
+    """
+    if not identifier:
+        return None
+
+    id_type, value = parse_ink_identifier(identifier)
+
+    if id_type == "macro":
+        for idx, ink in enumerate(inks):
+            if ink.get("macro_cluster_id") == value:
+                return (idx, ink)
+    elif id_type == "id":
+        for idx, ink in enumerate(inks):
+            if ink.get("id") == value:
+                return (idx, ink)
+
+    return None
+
+
+# Alias for backwards compatibility
+find_ink_by_macro_cluster_id = find_ink_by_identifier
 
 
 def parse_comment_json(comment: Optional[str]) -> Dict:
@@ -221,7 +385,7 @@ def remove_swatch_from_comment(existing_comment: Optional[str], year: int) -> st
     return json.dumps(data) if data else "{}"
 
 
-def create_explicit_assignments_only(inks: List[Dict], year: int) -> Dict[str, int]:
+def create_explicit_assignments_only(inks: List[Dict], year: int) -> Dict[str, str]:
     """
     Create assignments only for inks with explicit date assignments in private_comment.
 
@@ -230,7 +394,7 @@ def create_explicit_assignments_only(inks: List[Dict], year: int) -> Dict[str, i
         year: The year to create assignments for
 
     Returns:
-        Dictionary mapping date strings (YYYY-MM-DD) to ink indices (0-based)
+        Dictionary mapping date strings (YYYY-MM-DD) to macro_cluster_id
     """
     if not inks:
         return {}
@@ -239,34 +403,35 @@ def create_explicit_assignments_only(inks: List[Dict], year: int) -> Dict[str, i
     assigned_dates = set()
 
     # Check private_comment for assignments (this is where all assignments go)
-    for ink_idx, ink in enumerate(inks):
+    for ink in inks:
         private_comment = ink.get("private_comment", "")
         explicit_date = parse_swatch_date_from_comment(private_comment, year)
-        if explicit_date:
+        ink_identifier = get_ink_identifier(ink)
+        if explicit_date and ink_identifier:
             if explicit_date not in assigned_dates:
-                assignments[explicit_date] = ink_idx
+                assignments[explicit_date] = ink_identifier
                 assigned_dates.add(explicit_date)
 
     return assignments
 
 
-def get_month_summary(assignments: Dict[str, int], year: int, month: int) -> List[int]:
+def get_month_summary(assignments: Dict[str, str], year: int, month: int) -> List[str]:
     """
-    Get all ink indices assigned to a specific month.
+    Get all macro_cluster_ids assigned to a specific month.
 
     Args:
-        assignments: Dictionary mapping date strings to ink indices
+        assignments: Dictionary mapping date strings to macro_cluster_ids
         year: Year to filter by
         month: Month to filter by (1-12)
 
     Returns:
-        List of ink indices assigned to days in that month
+        List of macro_cluster_ids assigned to days in that month
     """
     month_inks = []
-    for date_str, ink_idx in assignments.items():
+    for date_str, macro_cluster_id in assignments.items():
         date = datetime.strptime(date_str, "%Y-%m-%d")
         if date.year == year and date.month == month:
-            month_inks.append(ink_idx)
+            month_inks.append(macro_cluster_id)
 
     return month_inks
 
@@ -291,7 +456,8 @@ def find_ink_by_name(ink_name: str, inks: List[Dict]) -> Optional[tuple]:
     Find an ink by name using case-insensitive substring matching.
 
     Tries exact match first, then substring match. Returns best match
-    (shortest name containing the query).
+    (shortest name containing the query). Normalizes apostrophes to handle
+    LLM-generated "smart quotes" vs ASCII apostrophes in database.
 
     Args:
         ink_name: Name to search for (can be partial)
@@ -300,12 +466,13 @@ def find_ink_by_name(ink_name: str, inks: List[Dict]) -> Optional[tuple]:
     Returns:
         (index, ink) tuple if found, None otherwise
     """
-    ink_name_lower = ink_name.lower()
+    # Normalize apostrophes in search query (LLMs often use curly quotes)
+    ink_name_lower = normalize_apostrophes(ink_name).lower()
 
     # First try exact match
     for idx, ink in enumerate(inks):
-        brand = ink.get("brand_name", "").lower()
-        name = ink.get("name", "").lower()
+        brand = normalize_apostrophes(ink.get("brand_name", "")).lower()
+        name = normalize_apostrophes(ink.get("name", "")).lower()
         full_name = f"{brand} {name}"
 
         if ink_name_lower == full_name or ink_name_lower == name:
@@ -314,8 +481,8 @@ def find_ink_by_name(ink_name: str, inks: List[Dict]) -> Optional[tuple]:
     # Then try substring match
     candidates = []
     for idx, ink in enumerate(inks):
-        brand = ink.get("brand_name", "").lower()
-        name = ink.get("name", "").lower()
+        brand = normalize_apostrophes(ink.get("brand_name", "")).lower()
+        name = normalize_apostrophes(ink.get("name", "")).lower()
         full_name = f"{brand} {name}"
 
         if ink_name_lower in full_name or ink_name_lower in name:
@@ -351,10 +518,10 @@ def search_inks(inks: List[Dict], year: int,
     matches = []
 
     for idx, ink in enumerate(inks):
-        # Apply filters
+        # Apply filters (normalize apostrophes for LLM compatibility)
         if query:
-            full_name = f"{ink.get('brand_name', '')} {ink.get('name', '')}".lower()
-            if query.lower() not in full_name:
+            full_name = normalize_apostrophes(f"{ink.get('brand_name', '')} {ink.get('name', '')}").lower()
+            if normalize_apostrophes(query).lower() not in full_name:
                 continue
 
         if color:
@@ -363,7 +530,8 @@ def search_inks(inks: List[Dict], year: int,
                 continue
 
         if brand:
-            if brand.lower() not in ink.get("brand_name", "").lower():
+            ink_brand = normalize_apostrophes(ink.get("brand_name", "")).lower()
+            if normalize_apostrophes(brand).lower() not in ink_brand:
                 continue
 
         ink_info = extract_ink_info(ink, idx)
@@ -389,11 +557,11 @@ class MoveResult:
 
 
 def move_ink_assignment(
-    session: Dict[str, int],
-    api: Dict[str, int],
+    session: Dict[str, str],
+    api: Dict[str, str],
     from_date: Optional[str],
     to_date: Optional[str],
-    ink_idx: Optional[int] = None,
+    macro_cluster_id: Optional[str] = None,
     inks: Optional[List[Dict]] = None
 ) -> tuple:
     """
@@ -403,17 +571,17 @@ def move_ink_assignment(
     mutating state directly. Callers are responsible for updating reactive state.
 
     Operations:
-    - assign: from_date=None, to_date=set -> assigns ink to date (ink_idx required)
-    - unassign: from_date=set, to_date=None -> removes assignment (ink_idx derived from session)
-    - move: both set -> moves assignment from one date to another (ink_idx derived from session)
+    - assign: from_date=None, to_date=set -> assigns ink to date (macro_cluster_id required)
+    - unassign: from_date=set, to_date=None -> removes assignment (macro_cluster_id derived from session)
+    - move: both set -> moves assignment from one date to another (macro_cluster_id derived from session)
 
     Args:
-        session: Current session assignments {date_str: ink_idx}
-        api: API assignments {date_str: ink_idx} (read-only, for protection checks)
+        session: Current session assignments {date_str: macro_cluster_id}
+        api: API assignments {date_str: macro_cluster_id} (read-only, for protection checks)
         from_date: Source date (None for new assignment)
         to_date: Target date (None for removal)
-        ink_idx: Index of ink to assign. Required for assign, optional for unassign/move
-                 (will be derived from session[from_date] if not provided)
+        macro_cluster_id: Macro cluster ID of ink to assign. Required for assign, optional for unassign/move
+                          (will be derived from session[from_date] if not provided)
         inks: Optional ink list for including ink info in result
 
     Returns:
@@ -433,7 +601,7 @@ def move_ink_assignment(
             except ValueError:
                 return session, MoveResult(False, f"Invalid {label} format: {date_str}. Use YYYY-MM-DD.")
 
-    # For unassign/move operations, derive ink_idx from session if not provided
+    # For unassign/move operations, derive macro_cluster_id from session if not provided
     if from_date is not None:
         # Check if from_date is API-protected (applies to both unassign and move)
         if from_date in api:
@@ -451,30 +619,35 @@ def move_ink_assignment(
                 from_date=from_date
             )
 
-        # Derive or validate ink_idx
-        session_ink_idx = session[from_date]
-        if ink_idx is None:
-            ink_idx = session_ink_idx
-        elif ink_idx != session_ink_idx:
+        # Derive or validate macro_cluster_id
+        session_macro_id = session[from_date]
+        if macro_cluster_id is None:
+            macro_cluster_id = session_macro_id
+        elif macro_cluster_id != session_macro_id:
             return session, MoveResult(
                 False,
-                f"Ink index mismatch: expected {session_ink_idx}, got {ink_idx}",
+                f"Macro cluster ID mismatch: expected {session_macro_id}, got {macro_cluster_id}",
                 from_date=from_date
             )
 
-    # For assign operations, ink_idx is required
-    if from_date is None and ink_idx is None:
-        return session, MoveResult(False, "ink_idx is required for assign operations")
+    # For assign operations, macro_cluster_id is required
+    if from_date is None and macro_cluster_id is None:
+        return session, MoveResult(False, "macro_cluster_id is required for assign operations")
 
-    # Get ink info now that we have ink_idx resolved
+    # Get ink info now that we have macro_cluster_id resolved
     ink_info = {}
-    if inks and ink_idx is not None and 0 <= ink_idx < len(inks):
-        ink = inks[ink_idx]
-        ink_info = {
-            "ink_idx": ink_idx,
-            "ink_brand": ink.get("brand_name", "Unknown"),
-            "ink_name": ink.get("name", "Unknown")
-        }
+    if inks and macro_cluster_id:
+        result = find_ink_by_macro_cluster_id(macro_cluster_id, inks)
+        if result:
+            idx, ink = result
+            ink_info = {
+                "macro_cluster_id": macro_cluster_id,
+                "ink_idx": idx,
+                "ink_brand": ink.get("brand_name", "Unknown"),
+                "ink_name": ink.get("name", "Unknown")
+            }
+        else:
+            ink_info = {"macro_cluster_id": macro_cluster_id}
 
     # Merge for checking what's currently assigned
     merged = {**session, **api}
@@ -502,9 +675,9 @@ def move_ink_assignment(
             )
 
         # Check if ink is already assigned somewhere
-        if ink_idx in merged.values():
+        if macro_cluster_id in merged.values():
             # Find where it's assigned
-            assigned_date = next((d for d, idx in merged.items() if idx == ink_idx), None)
+            assigned_date = next((d for d, mid in merged.items() if mid == macro_cluster_id), None)
             return session, MoveResult(
                 False,
                 f"Ink is already assigned to {assigned_date}",
@@ -512,15 +685,15 @@ def move_ink_assignment(
             )
 
         # Check if to_date already has a session assignment (will be overwritten)
-        displaced_ink_idx = session.get(to_date)
+        displaced_macro_id = session.get(to_date)
 
         # Perform assign
         new_session = session.copy()
-        new_session[to_date] = ink_idx
+        new_session[to_date] = macro_cluster_id
 
         result_data = {"operation": "assign", "to_date": to_date, **ink_info}
-        if displaced_ink_idx is not None:
-            result_data["displaced_ink_idx"] = displaced_ink_idx
+        if displaced_macro_id is not None:
+            result_data["displaced_macro_cluster_id"] = displaced_macro_id
 
         return new_session, MoveResult(
             True,
@@ -540,16 +713,16 @@ def move_ink_assignment(
         )
 
     # Check if to_date already has a session assignment (will be displaced)
-    displaced_ink_idx = session.get(to_date)
+    displaced_macro_id = session.get(to_date)
 
     # Perform move (atomic: delete from source, add to target)
     new_session = session.copy()
     del new_session[from_date]
-    new_session[to_date] = ink_idx
+    new_session[to_date] = macro_cluster_id
 
     result_data = {"operation": "move", "from_date": from_date, "to_date": to_date, **ink_info}
-    if displaced_ink_idx is not None:
-        result_data["displaced_ink_idx"] = displaced_ink_idx
+    if displaced_macro_id is not None:
+        result_data["displaced_macro_cluster_id"] = displaced_macro_id
 
     return new_session, MoveResult(
         True,
@@ -559,8 +732,8 @@ def move_ink_assignment(
 
 
 def swap_ink_assignments(
-    session: Dict[str, int],
-    api: Dict[str, int],
+    session: Dict[str, str],
+    api: Dict[str, str],
     date1: str,
     date2: str,
     inks: Optional[List[Dict]] = None
@@ -572,8 +745,8 @@ def swap_ink_assignments(
     and both inks should swap positions.
 
     Args:
-        session: Current session assignments {date_str: ink_idx}
-        api: API assignments {date_str: ink_idx} (read-only, for protection checks)
+        session: Current session assignments {date_str: macro_cluster_id}
+        api: API assignments {date_str: macro_cluster_id} (read-only, for protection checks)
         date1: First date (source of drag)
         date2: Second date (drop target)
         inks: Optional ink list for including ink info in result
@@ -602,34 +775,36 @@ def swap_ink_assignments(
             protected=True, date=date2
         )
 
-    # Get ink indices from session
+    # Get macro_cluster_ids from merged assignments
     merged = {**session, **api}
-    ink_idx1 = merged.get(date1)
-    ink_idx2 = merged.get(date2)
+    macro_id1 = merged.get(date1)
+    macro_id2 = merged.get(date2)
 
-    if ink_idx1 is None:
+    if macro_id1 is None:
         return session, MoveResult(False, f"No assignment found for {date1}")
-    if ink_idx2 is None:
+    if macro_id2 is None:
         return session, MoveResult(False, f"No assignment found for {date2}")
 
     # Get ink info for both
-    ink_info = {}
+    ink_info = {"macro_cluster_id1": macro_id1, "macro_cluster_id2": macro_id2}
     if inks:
-        if 0 <= ink_idx1 < len(inks):
-            ink1 = inks[ink_idx1]
-            ink_info["ink1_idx"] = ink_idx1
+        result1 = find_ink_by_macro_cluster_id(macro_id1, inks)
+        if result1:
+            idx1, ink1 = result1
+            ink_info["ink1_idx"] = idx1
             ink_info["ink1_brand"] = ink1.get("brand_name", "Unknown")
             ink_info["ink1_name"] = ink1.get("name", "Unknown")
-        if 0 <= ink_idx2 < len(inks):
-            ink2 = inks[ink_idx2]
-            ink_info["ink2_idx"] = ink_idx2
+        result2 = find_ink_by_macro_cluster_id(macro_id2, inks)
+        if result2:
+            idx2, ink2 = result2
+            ink_info["ink2_idx"] = idx2
             ink_info["ink2_brand"] = ink2.get("brand_name", "Unknown")
             ink_info["ink2_name"] = ink2.get("name", "Unknown")
 
     # Perform swap
     new_session = session.copy()
-    new_session[date1] = ink_idx2
-    new_session[date2] = ink_idx1
+    new_session[date1] = macro_id2
+    new_session[date2] = macro_id1
 
     return new_session, MoveResult(
         True,
@@ -637,4 +812,90 @@ def swap_ink_assignments(
         operation="swap", date1=date1, date2=date2, **ink_info
     )
 
+
+def shuffle_month_assignments(
+    session: Dict[str, str],
+    api: Dict[str, str],
+    year: int,
+    month: int,
+    inks: Optional[List[Dict]] = None,
+    rng: Optional[random.Random] = None,
+) -> tuple:
+    """
+    Randomly shuffle ink assignments among session-assigned dates within a month.
+
+    API-protected dates are left untouched. Only session assignments for dates
+    in the given month are reshuffled.
+
+    This is a pure function - it returns a new session dict rather than
+    mutating state directly.
+
+    Args:
+        session: Current session assignments {date_str: macro_cluster_id}
+        api: API assignments {date_str: macro_cluster_id} (read-only, never modified)
+        year: Year of the target month
+        month: Month to shuffle (1-12)
+        inks: Optional ink list for including ink info in result
+        rng: Optional random.Random instance for deterministic shuffling
+
+    Returns:
+        (new_session, MoveResult) tuple
+    """
+    if not 1 <= month <= 12:
+        return session, MoveResult(False, f"Invalid month: {month}. Must be 1-12.")
+
+    if rng is None:
+        rng = random.Random()
+
+    # Collect session-assigned dates within this month (excluding API-protected)
+    month_dates = []
+    for date_str in session:
+        if date_str in api:
+            continue
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            continue
+        if dt.year == year and dt.month == month:
+            month_dates.append(date_str)
+
+    if len(month_dates) < 2:
+        return session, MoveResult(
+            False,
+            f"Need at least 2 session assignments in {year}-{month:02d} to shuffle, found {len(month_dates)}.",
+        )
+
+    # Extract the macro_cluster_ids and shuffle them
+    macro_ids = [session[d] for d in month_dates]
+    rng.shuffle(macro_ids)
+
+    # Build new session with shuffled assignments
+    new_session = session.copy()
+    for date_str, macro_id in zip(month_dates, macro_ids):
+        new_session[date_str] = macro_id
+
+    # Build result info
+    result_data: Dict = {"operation": "shuffle", "year": year, "month": month}
+    result_data["dates_shuffled"] = sorted(month_dates)
+    result_data["count"] = len(month_dates)
+
+    if inks:
+        shuffled_details = []
+        for date_str in sorted(month_dates):
+            macro_id = new_session[date_str]
+            info = {"date": date_str, "macro_cluster_id": macro_id}
+            result = find_ink_by_macro_cluster_id(macro_id, inks)
+            if result:
+                idx, ink = result
+                info["ink_idx"] = idx
+                info["ink_brand"] = ink.get("brand_name", "Unknown")
+                info["ink_name"] = ink.get("name", "Unknown")
+            shuffled_details.append(info)
+        result_data["shuffled_assignments"] = shuffled_details
+
+    return new_session, MoveResult(
+        True,
+        f"Shuffled {len(month_dates)} ink assignments in {year}-{month:02d}",
+        **result_data,
+    )
 

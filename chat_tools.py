@@ -11,7 +11,7 @@ API assignments (from ink_cache) are protected and read-only.
 
 Session format:
 {
-    "assignments": { "2026-02-01": 18, ... },
+    "assignments": { "2026-02-01": "macro_cluster_id", ... },
     "themes": {
         "2026-02": { "theme": "Blues", "description": "Cool winter tones" },
         ...
@@ -24,8 +24,12 @@ import calendar
 from assignment_logic import (
     extract_ink_info,
     find_ink_by_name,
+    find_ink_by_macro_cluster_id,
+    get_ink_identifier,
+    normalize_apostrophes,
     search_inks as search_inks_pure,
     move_ink_assignment,
+    shuffle_month_assignments,
 )
 
 
@@ -38,8 +42,8 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
     Args:
         ink_data_reactive: Reactive value containing list of inks
         selected_year_reactive: Reactive value containing selected year
-        session_assignments_reactive: Reactive value for session assignments {date: ink_idx}
-        api_assignments_reactive: Reactive value for API assignments {date: ink_idx} (read-only)
+        session_assignments_reactive: Reactive value for session assignments {date: macro_cluster_id}
+        api_assignments_reactive: Reactive value for API assignments {date: macro_cluster_id} (read-only)
         session_themes_reactive: Reactive value for session themes {month_key: {theme, description}}
 
     Returns:
@@ -81,12 +85,13 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
             return {"success": False, "message": "No inks available in collection"}
 
         merged = _get_merged_assignments()
-        assigned_indices = set(merged.values())
+        assigned_macro_ids = set(merged.values())
 
         ink_list = []
         for idx, ink in enumerate(inks):
             ink_info = extract_ink_info(ink, idx)
-            ink_info["already_assigned"] = idx in assigned_indices
+            ink_id = get_ink_identifier(ink) or ""
+            ink_info["already_assigned"] = ink_id in assigned_macro_ids
             ink_list.append(ink_info)
 
         return {"success": True, "total_inks": len(inks), "inks": ink_list}
@@ -114,10 +119,11 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
 
         # Update assignment status based on merged assignments
         merged = _get_merged_assignments()
-        assigned_indices = set(merged.values())
+        assigned_macro_ids = set(merged.values())
 
         for match in matches:
-            match["already_assigned"] = match["index"] in assigned_indices
+            macro_id = match.get("macro_cluster_id", "")
+            match["already_assigned"] = macro_id in assigned_macro_ids
 
         return {"success": True, "matches_found": len(matches), "matches": matches}
 
@@ -147,18 +153,21 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
 
         # Filter to this month
         assignments = []
-        for date_str, ink_idx in merged.items():
-            if date_str.startswith(f"{year}-{month:02d}-") and ink_idx < len(inks):
+        for date_str, macro_cluster_id in merged.items():
+            if date_str.startswith(f"{year}-{month:02d}-"):
                 day = int(date_str.split("-")[2])
-                ink = inks[ink_idx]
-                assignments.append({
-                    "date": date_str,
-                    "day": day,
-                    "ink_index": ink_idx,
-                    "brand": ink.get("brand_name", "Unknown"),
-                    "name": ink.get("name", "Unknown"),
-                    "protected": date_str in api  # From API = protected
-                })
+                result = find_ink_by_macro_cluster_id(macro_cluster_id, inks)
+                if result:
+                    idx, ink = result
+                    assignments.append({
+                        "date": date_str,
+                        "day": day,
+                        "macro_cluster_id": macro_cluster_id,
+                        "ink_index": idx,
+                        "brand": ink.get("brand_name", "Unknown"),
+                        "name": ink.get("name", "Unknown"),
+                        "protected": date_str in api  # From API = protected
+                    })
 
         assignments.sort(key=lambda x: x["day"])
 
@@ -199,6 +208,10 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
             return {"success": False, "message": f"Could not find ink matching '{ink_identifier}'."}
 
         idx, ink = result
+        macro_cluster_id = get_ink_identifier(ink)
+
+        if not macro_cluster_id:
+            return {"success": False, "message": f"Ink '{ink_identifier}' has no identifier."}
 
         # Use unified move function (assign = move with from_date=None)
         session = _snapshot["session"]
@@ -209,7 +222,7 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
             api=api,
             from_date=None,
             to_date=date_str,
-            ink_idx=idx,
+            macro_cluster_id=macro_cluster_id,
             inks=inks
         )
 
@@ -223,6 +236,7 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
         return {
             "success": True,
             "message": f"Assigned '{ink.get('brand_name')} {ink.get('name')}' to {date_str}",
+            "macro_cluster_id": macro_cluster_id,
             "ink_index": idx,
             "date": date_str,
             "note": "This is a session assignment. Use Save Session to persist."
@@ -275,7 +289,7 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
 
         successful, failed, already_assigned = [], [], []
         session = _snapshot["session"].copy()
-        assigned_indices = set(merged.values())
+        assigned_macro_ids = set(merged.values())
 
         for i, ink_id in enumerate(ink_identifiers):
             if i >= len(available_days):
@@ -287,10 +301,16 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
                 continue
 
             idx, ink = result
+            macro_cluster_id = get_ink_identifier(ink)
 
-            if idx in assigned_indices:
+            if not macro_cluster_id:
+                failed.append({"ink_identifier": ink_id, "reason": "No identifier"})
+                continue
+
+            if macro_cluster_id in assigned_macro_ids:
                 already_assigned.append({
                     "ink_identifier": ink_id,
+                    "macro_cluster_id": macro_cluster_id,
                     "ink_index": idx,
                     "brand": ink.get("brand_name"),
                     "name": ink.get("name")
@@ -300,10 +320,11 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
             day = available_days[i]
             date_str = f"{year}-{month:02d}-{day:02d}"
 
-            session[date_str] = idx
-            assigned_indices.add(idx)
+            session[date_str] = macro_cluster_id
+            assigned_macro_ids.add(macro_cluster_id)
 
             successful.append({
+                "macro_cluster_id": macro_cluster_id,
                 "ink_index": idx,
                 "brand": ink.get("brand_name"),
                 "name": ink.get("name"),
@@ -390,20 +411,23 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
         month_prefix = f"{year}-{month:02d}-"
 
         # Check API assignments for protected count
-        for date_str, ink_idx in api.items():
-            if date_str.startswith(month_prefix) and ink_idx < len(inks):
-                ink = inks[ink_idx]
-                protected.append({
-                    "date": date_str,
-                    "brand": ink.get("brand_name"),
-                    "name": ink.get("name"),
-                    "reason": "Protected (from API)"
-                })
+        for date_str, macro_cluster_id in api.items():
+            if date_str.startswith(month_prefix):
+                result = find_ink_by_macro_cluster_id(macro_cluster_id, inks)
+                if result:
+                    _, ink = result
+                    protected.append({
+                        "date": date_str,
+                        "brand": ink.get("brand_name"),
+                        "name": ink.get("name"),
+                        "reason": "Protected (from API)"
+                    })
 
         # Remove session assignments for this month
-        for date_str, ink_idx in list(session.items()):
+        for date_str, macro_cluster_id in list(session.items()):
             if date_str.startswith(month_prefix):
-                ink = inks[ink_idx] if ink_idx < len(inks) else {}
+                result = find_ink_by_macro_cluster_id(macro_cluster_id, inks)
+                ink = result[1] if result else {}
                 removed.append({
                     "date": date_str,
                     "day": int(date_str.split("-")[2]),
@@ -525,20 +549,21 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
         api = _snapshot["api"]
         session = _snapshot["session"]
 
-        # Build reverse lookups: ink_idx -> date
-        api_assigned_indices = set(api.values())
-        session_idx_to_date = {idx: date for date, idx in session.items()}
+        # Build reverse lookups: macro_cluster_id -> date
+        api_assigned_macro_ids = set(api.values())
+        session_macro_id_to_date = {macro_id: date for date, macro_id in session.items()}
 
         def matches_filters(ink: dict) -> bool:
             """Check if ink matches all provided filters."""
             if query:
-                query_lower = query.lower()
-                name_match = query_lower in ink.get("name", "").lower()
-                brand_match = query_lower in ink.get("brand_name", "").lower()
+                # Normalize apostrophes for LLM compatibility (curly vs ASCII quotes)
+                query_normalized = normalize_apostrophes(query).lower()
+                name_match = query_normalized in normalize_apostrophes(ink.get("name", "")).lower()
+                brand_match = query_normalized in normalize_apostrophes(ink.get("brand_name", "")).lower()
                 tags = ink.get("cluster_tags", [])
-                tag_match = any(query_lower in tag.lower() for tag in tags)
+                tag_match = any(query_normalized in tag.lower() for tag in tags)
                 comment = ink.get("private_comment", "")
-                comment_match = query_lower in comment.lower() if comment else False
+                comment_match = query_normalized in comment.lower() if comment else False
 
                 if not (name_match or brand_match or tag_match or comment_match):
                     return False
@@ -549,7 +574,9 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
                     return False
 
             if brand:
-                if brand.lower() not in ink.get("brand_name", "").lower():
+                brand_normalized = normalize_apostrophes(brand).lower()
+                ink_brand = normalize_apostrophes(ink.get("brand_name", "")).lower()
+                if brand_normalized not in ink_brand:
                     return False
 
             return True
@@ -558,17 +585,19 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
         counts = {"unassigned": 0, "session_assigned": 0, "api_assigned": 0}
 
         for idx, ink in enumerate(inks):
+            macro_cluster_id = get_ink_identifier(ink) or ""
+
             # Categorize the ink
-            if idx in api_assigned_indices:
+            if macro_cluster_id in api_assigned_macro_ids:
                 counts["api_assigned"] += 1
                 continue  # Never include API-assigned inks
 
-            if idx in session_idx_to_date:
+            if macro_cluster_id in session_macro_id_to_date:
                 counts["session_assigned"] += 1
                 if not include_session_assigned:
                     continue
                 status = "session_assigned"
-                current_date = session_idx_to_date[idx]
+                current_date = session_macro_id_to_date[macro_cluster_id]
             else:
                 counts["unassigned"] += 1
                 status = "unassigned"
@@ -605,6 +634,50 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
             "available_inks": available_inks,
             "hint": "Unassigned inks can be directly assigned. Session-assigned inks can be moved to improve the overall schedule."
         }
+
+    def shuffle_month(month: int, year: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Randomly shuffle ink assignments among session-assigned dates within a month.
+
+        API-protected dates are left untouched. Only session assignments for dates
+        in the given month are reshuffled. This is useful for quickly randomizing
+        the order of inks within a month while keeping the same set of inks.
+
+        Args:
+            month: Month number (1-12)
+            year: Year (defaults to currently selected year)
+
+        Returns:
+            Success status with details of the new assignment order.
+        """
+        if year is None:
+            year = _snapshot["year"]
+
+        inks = _snapshot["inks"]
+        if not inks:
+            return {"success": False, "message": "No inks available in collection"}
+
+        session = _snapshot["session"]
+        api = _snapshot["api"]
+
+        new_session, result = shuffle_month_assignments(
+            session=session,
+            api=api,
+            year=year,
+            month=month,
+            inks=inks,
+        )
+
+        if not result.success:
+            return result.to_dict()
+
+        # Update reactive state and snapshot
+        session_assignments_reactive.set(new_session)
+        _snapshot["session"] = new_session.copy()
+
+        response = result.to_dict()
+        response["note"] = "These are session assignments. Use Save Session to persist."
+        return response
 
     def set_month_theme(month: int, theme: str, description: str = "",
                         year: Optional[int] = None) -> Dict[str, Any]:
@@ -752,6 +825,7 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
         clear_month_assignments,
         get_current_assignments_summary,
         find_available_inks_for_theme,
+        shuffle_month,
         set_month_theme,
         get_month_theme,
         clear_month_theme

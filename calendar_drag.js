@@ -88,13 +88,13 @@
     }
 
     function selectInk(item) {
-        const inkIdx = item.dataset.inkIdx;
+        const macroClusterId = item.dataset.macroClusterId;
         const inkName = item.dataset.inkName;
 
-        if (inkIdx !== undefined) {
+        if (macroClusterId !== undefined) {
             // Send selection to Shiny
             Shiny.setInputValue('ink_picker_select', {
-                ink_idx: inkIdx,
+                macro_cluster_id: macroClusterId,
                 ink_name: inkName,
                 timestamp: Date.now()
             });
@@ -107,7 +107,7 @@
     // Track the currently dragged element
     let draggedElement = null;
     let draggedDate = null;
-    let draggedInkIdx = null;
+    let draggedMacroClusterId = null;
 
     // Initialize drag-and-drop after Shiny connects
     $(document).on('shiny:connected', function() {
@@ -180,7 +180,7 @@
         const el = e.currentTarget;
         draggedElement = el;
         draggedDate = el.dataset.date;
-        draggedInkIdx = el.dataset.inkIdx;
+        draggedMacroClusterId = el.dataset.macroClusterId;
 
         // Set drag data
         e.dataTransfer.effectAllowed = 'move';
@@ -203,7 +203,7 @@
 
         draggedElement = null;
         draggedDate = null;
-        draggedInkIdx = null;
+        draggedMacroClusterId = null;
     }
 
     function handleDragOver(e) {
@@ -264,7 +264,7 @@
 
         const fromDate = draggedDate;
         const toDate = targetEl.dataset.date;
-        const toInkIdx = targetEl.dataset.inkIdx;
+        const toMacroClusterId = targetEl.dataset.macroClusterId;
 
         if (!fromDate || !toDate) {
             return;
@@ -275,9 +275,9 @@
         Shiny.setInputValue('calendar_drag_drop', {
             from_date: fromDate,
             to_date: toDate,
-            from_ink_idx: draggedInkIdx,
-            to_ink_idx: toInkIdx || null,
-            is_swap: !!toInkIdx,
+            from_macro_cluster_id: draggedMacroClusterId,
+            to_macro_cluster_id: toMacroClusterId || null,
+            is_swap: !!toMacroClusterId,
             timestamp: Date.now()  // Force reactivity on repeated drags
         });
     }

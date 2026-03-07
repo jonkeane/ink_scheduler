@@ -70,12 +70,12 @@ class TestListAllInks:
         """Test that assigned inks are marked correctly."""
         tools, _, _, _ = setup_tools(
             inks=sample_inks,
-            session={"2026-01-01": 0, "2026-01-02": 1}
+            session={"2026-01-01": "macro:macro_0", "2026-01-02": "macro:macro_1"}
         )
         result = tools["list_all_inks"]()
 
         assert result["success"] is True
-        # Ink 0 and 1 should be assigned
+        # macro_0 and macro_1 should be assigned
         ink_0 = next(i for i in result["inks"] if i["index"] == 0)
         ink_1 = next(i for i in result["inks"] if i["index"] == 1)
         ink_2 = next(i for i in result["inks"] if i["index"] == 2)
@@ -88,8 +88,8 @@ class TestListAllInks:
         """Test that API and session assignments are merged."""
         tools, _, _, _ = setup_tools(
             inks=sample_inks,
-            session={"2026-01-01": 0},
-            api={"2026-01-02": 1}
+            session={"2026-01-01": "macro:macro_0"},
+            api={"2026-01-02": "macro:macro_1"}
         )
         result = tools["list_all_inks"]()
 
@@ -196,7 +196,7 @@ class TestGetMonthAssignments:
         """Test that API assignments are marked as protected."""
         tools, _, _, _ = setup_tools(
             inks=sample_inks,
-            api={"2026-01-15": 1}
+            api={"2026-01-15": "macro:macro_1"}
         )
         result = tools["get_month_assignments"](month=1)
 
@@ -208,7 +208,7 @@ class TestGetMonthAssignments:
         """Test that session assignments are not protected."""
         tools, _, _, _ = setup_tools(
             inks=sample_inks,
-            session={"2026-01-15": 1}
+            session={"2026-01-15": "macro:macro_1"}
         )
         result = tools["get_month_assignments"](month=1)
 
@@ -244,13 +244,13 @@ class TestAssignInkToDate:
         assert result["ink_index"] == 0
         assert result["date"] == "2026-01-01"
         # Verify reactive state was updated
-        assert session_reactive.get()["2026-01-01"] == 0
+        assert session_reactive.get()["2026-01-01"] == "macro:macro_0"
 
     def test_api_protected_date(self, sample_inks):
         """Test that API-protected dates cannot be assigned."""
         tools, _, _, _ = setup_tools(
             inks=sample_inks,
-            api={"2026-01-15": 1}
+            api={"2026-01-15": "macro:macro_1"}
         )
         result = tools["assign_ink_to_date"](
             ink_identifier="Blue Velvet",
@@ -263,7 +263,7 @@ class TestAssignInkToDate:
         """Test that inks already assigned elsewhere fail."""
         tools, _, _, _ = setup_tools(
             inks=sample_inks,
-            session={"2026-01-01": 0}  # Ink 0 already assigned
+            session={"2026-01-01": "macro:macro_0"}  # macro_0 already assigned
         )
         result = tools["assign_ink_to_date"](
             ink_identifier="Blue Velvet",
@@ -287,19 +287,19 @@ class TestAssignInkToDate:
         """Test that session assignments can be displaced."""
         tools, _, session_reactive, _ = setup_tools(
             inks=sample_inks,
-            session={"2026-01-01": 1}  # Ink 1 on Jan 1
+            session={"2026-01-01": "macro:macro_1"}  # macro_1 on Jan 1
         )
         result = tools["assign_ink_to_date"](
-            ink_identifier="Blue Velvet",  # Ink 0
+            ink_identifier="Blue Velvet",  # macro_0
             date_str="2026-01-01"
         )
 
         assert result["success"] is True
-        assert session_reactive.get()["2026-01-01"] == 0
+        assert session_reactive.get()["2026-01-01"] == "macro:macro_0"
 
     def test_fuzzy_ink_matching(self, sample_inks):
         """Test fuzzy matching by brand + name."""
-        tools, _, _, _ = setup_tools(inks=sample_inks)
+        tools, _, session_reactive, _ = setup_tools(inks=sample_inks)
         result = tools["assign_ink_to_date"](
             ink_identifier="Diamine Blue Velvet",
             date_str="2026-01-01"
@@ -307,6 +307,7 @@ class TestAssignInkToDate:
 
         assert result["success"] is True
         assert result["ink_index"] == 0
+        assert session_reactive.get()["2026-01-01"] == "macro:macro_0"
 
     def test_no_inks_available(self):
         """Test with empty ink collection."""
@@ -356,7 +357,7 @@ class TestBulkAssignMonth:
     def test_more_inks_than_days(self, sample_inks):
         """Test when more inks requested than available days."""
         # Create 35 inks (more than any month has days)
-        many_inks = [{"id": str(i), "brand_name": "Test", "name": f"Ink{i}"} for i in range(35)]
+        many_inks = [{"id": str(i), "macro_cluster_id": f"many_{i}", "brand_name": "Test", "name": f"Ink{i}"} for i in range(35)]
         tools, _, _, _ = setup_tools(inks=many_inks)
         result = tools["bulk_assign_month"](
             ink_identifiers=[f"Ink{i}" for i in range(35)],
@@ -370,10 +371,10 @@ class TestBulkAssignMonth:
         """Test when some inks are already assigned."""
         tools, _, _, _ = setup_tools(
             inks=sample_inks,
-            session={"2026-02-14": 0}  # Ink 0 already assigned
+            session={"2026-02-14": "macro:macro_0"}  # macro_0 already assigned
         )
         result = tools["bulk_assign_month"](
-            ink_identifiers=["Blue Velvet", "Apache Sunset"],  # Ink 0 and 2
+            ink_identifiers=["Blue Velvet", "Apache Sunset"],  # macro_0 and macro_2
             month=1
         )
 
@@ -382,7 +383,7 @@ class TestBulkAssignMonth:
 
     def test_ink_not_found_partial_failure(self, sample_inks):
         """Test partial failure when some inks not found."""
-        tools, _, _, _ = setup_tools(inks=sample_inks)
+        tools, _, session_reactive, _ = setup_tools(inks=sample_inks)
         result = tools["bulk_assign_month"](
             ink_identifiers=["Blue Velvet", "Nonexistent Ink"],
             month=1
@@ -391,14 +392,16 @@ class TestBulkAssignMonth:
         assert result["successful_assignments"] == 1
         assert result["failed_assignments"] == 1
         assert "Ink not found" in result["failed"][0]["reason"]
+        # Verify the successful one was assigned with macro_cluster_id
+        assert session_reactive.get()["2026-01-01"] == "macro:macro_0"
 
     def test_protected_dates_preserved(self, sample_inks):
         """Test that API-protected dates are skipped."""
-        # Fill some January dates with API assignments (only using inks 0 and 1)
-        api = {"2026-01-01": 0, "2026-01-02": 1, "2026-01-03": 0}
+        # Fill some January dates with API assignments
+        api = {"2026-01-01": "macro:macro_0", "2026-01-02": "macro:macro_1", "2026-01-03": "macro:macro_2"}
         tools, _, session_reactive, _ = setup_tools(inks=sample_inks, api=api)
         result = tools["bulk_assign_month"](
-            ink_identifiers=["Yama-dori"],  # Ink 3, not assigned via API
+            ink_identifiers=["Yama-dori"],  # macro_3, not assigned via API
             month=1
         )
 
@@ -450,7 +453,7 @@ class TestUnassignInkFromDate:
         """Test successful unassignment."""
         tools, _, session_reactive, _ = setup_tools(
             inks=sample_inks,
-            session={"2026-01-01": 0}
+            session={"2026-01-01": "macro:macro_0"}
         )
         result = tools["unassign_ink_from_date"](date_str="2026-01-01")
 
@@ -461,7 +464,7 @@ class TestUnassignInkFromDate:
         """Test that API-protected dates cannot be unassigned."""
         tools, _, _, _ = setup_tools(
             inks=sample_inks,
-            api={"2026-01-15": 1}
+            api={"2026-01-15": "macro:macro_1"}
         )
         result = tools["unassign_ink_from_date"](date_str="2026-01-15")
 
@@ -478,7 +481,7 @@ class TestUnassignInkFromDate:
         """Test that reactive state is properly updated."""
         tools, _, session_reactive, _ = setup_tools(
             inks=sample_inks,
-            session={"2026-01-01": 0, "2026-01-02": 1}
+            session={"2026-01-01": "macro:macro_0", "2026-01-02": "macro:macro_1"}
         )
         tools["unassign_ink_from_date"](date_str="2026-01-01")
 
@@ -514,7 +517,7 @@ class TestClearMonthAssignments:
         """Test clearing only session assignments."""
         tools, _, session_reactive, _ = setup_tools(
             inks=sample_inks,
-            session={"2026-01-01": 0, "2026-01-15": 1, "2026-02-01": 2}
+            session={"2026-01-01": "macro:macro_0", "2026-01-15": "macro:macro_1", "2026-02-01": "macro:macro_2"}
         )
         result = tools["clear_month_assignments"](month=1)
 
@@ -527,8 +530,8 @@ class TestClearMonthAssignments:
         """Test that API assignments are preserved."""
         tools, _, session_reactive, _ = setup_tools(
             inks=sample_inks,
-            session={"2026-01-01": 0},
-            api={"2026-01-15": 1}
+            session={"2026-01-01": "macro:macro_0"},
+            api={"2026-01-15": "macro:macro_1"}
         )
         result = tools["clear_month_assignments"](month=1)
 
@@ -539,8 +542,8 @@ class TestClearMonthAssignments:
         """Test that removed and protected counts are correct."""
         tools, _, _, _ = setup_tools(
             inks=sample_inks,
-            session={"2026-03-01": 0, "2026-03-15": 2},
-            api={"2026-03-10": 1}
+            session={"2026-03-01": "macro:macro_0", "2026-03-15": "macro:macro_2"},
+            api={"2026-03-10": "macro:macro_1"}
         )
         result = tools["clear_month_assignments"](month=3)
 
@@ -568,7 +571,7 @@ class TestGetCurrentAssignmentsSummary:
         """Test with assignments across multiple months."""
         tools, _, _, _ = setup_tools(
             inks=sample_inks,
-            session={"2026-01-01": 0, "2026-02-14": 1, "2026-03-01": 2}
+            session={"2026-01-01": "macro:macro_0", "2026-02-14": "macro:macro_1", "2026-03-01": "macro:macro_2"}
         )
         result = tools["get_current_assignments_summary"]()
 
@@ -579,8 +582,8 @@ class TestGetCurrentAssignmentsSummary:
         """Test that API and session counts are separate."""
         tools, _, _, _ = setup_tools(
             inks=sample_inks,
-            session={"2026-01-01": 0},
-            api={"2026-01-15": 1}
+            session={"2026-01-01": "macro:macro_0"},
+            api={"2026-01-15": "macro:macro_1"}
         )
         result = tools["get_current_assignments_summary"]()
 
@@ -633,11 +636,11 @@ class TestFindAvailableInksForTheme:
         """Test excluding session-assigned inks."""
         tools, _, _, _ = setup_tools(
             inks=sample_inks,
-            session={"2026-01-01": 0}
+            session={"2026-01-01": "macro:macro_0"}
         )
         result = tools["find_available_inks_for_theme"](include_session_assigned=False)
 
-        assert result["matches_returned"] == 4  # Ink 0 excluded
+        assert result["matches_returned"] == 4  # macro_0 excluded
         indices = [ink["index"] for ink in result["available_inks"]]
         assert 0 not in indices
 
@@ -645,11 +648,11 @@ class TestFindAvailableInksForTheme:
         """Test that session-assigned inks are included by default."""
         tools, _, _, _ = setup_tools(
             inks=sample_inks,
-            session={"2026-01-01": 0}
+            session={"2026-01-01": "macro:macro_0"}
         )
         result = tools["find_available_inks_for_theme"]()
 
-        # Ink 0 should be included with status "session_assigned"
+        # macro_0 should be included with status "session_assigned"
         ink_0 = next((i for i in result["available_inks"] if i["index"] == 0), None)
         assert ink_0 is not None
         assert ink_0["status"] == "session_assigned"
@@ -659,7 +662,7 @@ class TestFindAvailableInksForTheme:
         """Test that API-assigned inks are never returned."""
         tools, _, _, _ = setup_tools(
             inks=sample_inks,
-            api={"2026-01-15": 1}
+            api={"2026-01-15": "macro:macro_1"}
         )
         result = tools["find_available_inks_for_theme"]()
 
@@ -703,8 +706,8 @@ class TestFindAvailableInksForTheme:
         """Test collection summary counts."""
         tools, _, _, _ = setup_tools(
             inks=sample_inks,
-            session={"2026-01-01": 0},
-            api={"2026-01-15": 1}
+            session={"2026-01-01": "macro:macro_0"},
+            api={"2026-01-15": "macro:macro_1"}
         )
         result = tools["find_available_inks_for_theme"]()
 
@@ -882,6 +885,128 @@ class TestClearMonthTheme:
         themes = themes_reactive.get()
         assert "2026-01" not in themes
         assert "2026-02" in themes  # Other theme preserved
+
+
+# =============================================================================
+# Tests for shuffle_month()
+# =============================================================================
+
+class TestShuffleMonth:
+    """Tests for shuffle_month tool function."""
+
+    def test_empty_collection(self):
+        """Test with no inks in collection."""
+        tools, _, _, _ = setup_tools(inks=[])
+        result = tools["shuffle_month"](month=3)
+
+        assert result["success"] is False
+        assert "No inks available" in result["message"]
+
+    def test_shuffle_success(self, sample_inks):
+        """Test successful shuffle updates session state."""
+        session = {
+            "2026-03-01": "macro:macro_0",
+            "2026-03-10": "macro:macro_1",
+            "2026-03-20": "macro:macro_2",
+        }
+        tools, _, session_reactive, _ = setup_tools(
+            inks=sample_inks, session=session
+        )
+        result = tools["shuffle_month"](month=3)
+
+        assert result["success"] is True
+        assert result["operation"] == "shuffle"
+        assert result["count"] == 3
+        # Session reactive should be updated
+        new_session = session_reactive.get()
+        assert sorted(new_session.values()) == sorted(session.values())
+
+    def test_shuffle_too_few(self, sample_inks):
+        """Test shuffle fails with <2 shufflable dates."""
+        tools, _, _, _ = setup_tools(
+            inks=sample_inks, session={"2026-03-01": "macro:macro_0"}
+        )
+        result = tools["shuffle_month"](month=3)
+
+        assert result["success"] is False
+        assert "Need at least 2" in result["message"]
+
+    def test_shuffle_skips_api_protected(self, sample_inks):
+        """Test shuffle doesn't affect API-protected dates."""
+        session = {"2026-03-10": "macro:macro_1", "2026-03-20": "macro:macro_2"}
+        api = {"2026-03-05": "macro:macro_0"}
+        tools, _, session_reactive, _ = setup_tools(
+            inks=sample_inks, session=session, api=api
+        )
+        result = tools["shuffle_month"](month=3)
+
+        assert result["success"] is True
+        assert result["count"] == 2
+        # API date was never in session, shouldn't appear in new session
+        new_session = session_reactive.get()
+        assert "2026-03-05" not in new_session
+
+    def test_shuffle_preserves_other_months(self, sample_inks):
+        """Test shuffle doesn't touch other months."""
+        session = {
+            "2026-02-15": "macro:macro_4",
+            "2026-03-01": "macro:macro_0",
+            "2026-03-15": "macro:macro_1",
+            "2026-04-01": "macro:macro_3",
+        }
+        tools, _, session_reactive, _ = setup_tools(
+            inks=sample_inks, session=session
+        )
+        result = tools["shuffle_month"](month=3)
+
+        assert result["success"] is True
+        new_session = session_reactive.get()
+        assert new_session["2026-02-15"] == "macro:macro_4"
+        assert new_session["2026-04-01"] == "macro:macro_3"
+
+    def test_shuffle_invalid_month(self, sample_inks):
+        """Test shuffle with invalid month number."""
+        tools, _, _, _ = setup_tools(
+            inks=sample_inks, session={"2026-03-01": "macro:macro_0"}
+        )
+        result = tools["shuffle_month"](month=0)
+
+        assert result["success"] is False
+        assert "Invalid month" in result["message"]
+
+    def test_shuffle_default_year(self, sample_inks):
+        """Test shuffle uses default year from snapshot."""
+        session = {"2026-03-01": "macro:macro_0", "2026-03-15": "macro:macro_1"}
+        tools, _, _, _ = setup_tools(
+            inks=sample_inks, session=session, year=2026
+        )
+        result = tools["shuffle_month"](month=3)
+
+        assert result["success"] is True
+        assert result["year"] == 2026
+
+    def test_shuffle_explicit_year(self, sample_inks):
+        """Test shuffle with explicit year parameter."""
+        session = {"2027-06-01": "macro:macro_0", "2027-06-15": "macro:macro_1"}
+        tools, _, _, _ = setup_tools(
+            inks=sample_inks, session=session, year=2027
+        )
+        result = tools["shuffle_month"](month=6, year=2027)
+
+        assert result["success"] is True
+        assert result["year"] == 2027
+
+    def test_shuffle_result_has_note(self, sample_inks):
+        """Test shuffle result includes session save note."""
+        session = {"2026-03-01": "macro:macro_0", "2026-03-15": "macro:macro_1"}
+        tools, _, _, _ = setup_tools(
+            inks=sample_inks, session=session
+        )
+        result = tools["shuffle_month"](month=3)
+
+        assert result["success"] is True
+        assert "note" in result
+        assert "session" in result["note"].lower()
 
 
 if __name__ == "__main__":
