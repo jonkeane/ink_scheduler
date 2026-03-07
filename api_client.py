@@ -1,6 +1,7 @@
 """
 API client for Fountain Pen Companion with pagination support
 """
+import time
 import requests
 from typing import List, Dict, Optional
 
@@ -190,9 +191,18 @@ def update_ink_private_comment(
         }
     }
 
-    response = requests.patch(url, headers=headers, json=payload)
+    max_retries = 3
+    for attempt in range(max_retries):
+        response = requests.patch(url, headers=headers, json=payload)
 
-    response.raise_for_status()
+        if response.status_code == 429:
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # 1s, 2s, 4s
+                time.sleep(wait_time)
+                continue
+
+        response.raise_for_status()
+        break
 
     response_data = response.json()
     return flatten_ink_data(response_data.get("data", {}))
