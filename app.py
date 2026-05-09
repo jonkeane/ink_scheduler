@@ -5,6 +5,7 @@ import os
 import logging
 import json
 import traceback
+import asyncio
 
 # Increase websocket ping timeout to prevent disconnects during long LLM operations
 os.environ["SHINY_WEBSOCKET_PING_TIMEOUT"] = "1200"
@@ -90,6 +91,7 @@ app_ui = ui.page_fluid(
                 ui.input_action_button("cancel_chat", "", class_="cancel-chat-btn", disabled="disabled"),
                 class_="chat-container"
             ),
+            ui.input_action_button("reset_chat", "Clear Chat", class_="btn-outline-secondary sidebar-btn-full"),
             ui.output_text("session_status", inline=True),
             ui.download_button("save_session", "Save Session", class_="btn-outline-secondary sidebar-btn-full"),
             ui.input_file("load_session", None, accept=[".json"], button_label="Load Session", multiple=False),
@@ -628,12 +630,20 @@ def server(input, output, session):
             ui.notification_show("No unsaved assignments for this month", type="warning")
             return
 
-        ui.notification_show(f"Saving {len(to_save)} assignments...", duration=None, id="bulk_save_loading")
+        total = len(to_save)
+        ui.notification_show(f"Saving 0 of {total}...", duration=None, id="bulk_save_loading")
 
         saved_count = 0
         error_count = 0
 
-        for date_str, macro_cluster_id in to_save:
+        for i, (date_str, macro_cluster_id) in enumerate(to_save):
+            ui.notification_show(
+                f"Saving {i + 1} of {total} ({date_str})...",
+                duration=None,
+                id="bulk_save_loading",
+            )
+            if i > 0:
+                await asyncio.sleep(1)
             try:
                 # Look up ink by macro_cluster_id
                 result = find_ink_by_macro_cluster_id(macro_cluster_id, inks)
@@ -1993,11 +2003,13 @@ def server(input, output, session):
         rows = []
         for month_num in range(1, 13):
             month_name = datetime(2000, month_num, 1).strftime("%B")
-            ink_indices = get_month_summary(current_assignments, year, month_num)
-            ink_names = [
-                f"{inks[idx].get('brand_name', '')} - {inks[idx].get('name', '')}"
-                for idx in ink_indices if idx < len(inks)
-            ]
+            ink_identifiers = get_month_summary(current_assignments, year, month_num)
+            ink_names = []
+            for identifier in ink_identifiers:
+                result = find_ink_by_macro_cluster_id(identifier, inks)
+                if result is not None:
+                    _, ink = result
+                    ink_names.append(f"{ink.get('brand_name', '')} - {ink.get('name', '')}")
 
             rows.append({
                 "Month": month_name,
