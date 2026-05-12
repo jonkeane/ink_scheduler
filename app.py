@@ -831,17 +831,7 @@ def server(input, output, session):
         year = input.year()
         month = current_month.get()
 
-        with reactive.isolate():
-            session = session_assignments.get()
-            api = api_assignments.get()
-            inks = ink_data.get()
-            themes = session_themes.get()
-
         for date_str in get_month_dates(year, month):
-            # Only process session assignments (not API)
-            if date_str not in session or date_str in api:
-                continue
-
             button_id = make_button_id("save", date_str)
             try:
                 current_clicks = getattr(input, button_id, lambda: 0)()
@@ -849,6 +839,13 @@ def server(input, output, session):
 
                 if detect_new_click(current_clicks, prev_clicks):
                     _save_button_clicks[button_id] = current_clicks
+                    with reactive.isolate():
+                        session = session_assignments.get()
+                        api = api_assignments.get()
+                        inks = ink_data.get()
+                        themes = session_themes.get()
+                    if date_str not in session or date_str in api:
+                        continue
                     macro_cluster_id = session[date_str]
                     handle_save_assignment(date_str, macro_cluster_id, inks, year, themes)
             except:

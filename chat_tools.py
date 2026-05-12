@@ -122,8 +122,8 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
         assigned_macro_ids = set(merged.values())
 
         for match in matches:
-            macro_id = match.get("macro_cluster_id", "")
-            match["already_assigned"] = macro_id in assigned_macro_ids
+            ink_id = get_ink_identifier(inks[match["index"]]) or ""
+            match["already_assigned"] = ink_id in assigned_macro_ids
 
         return {"success": True, "matches_found": len(matches), "matches": matches}
 
