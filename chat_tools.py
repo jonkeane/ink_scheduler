@@ -30,6 +30,7 @@ from assignment_logic import (
     search_inks as search_inks_pure,
     move_ink_assignment,
     shuffle_month_assignments,
+    assignable_inks,
 )
 
 
@@ -77,12 +78,15 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
         List all inks in the collection with their basic information.
 
         Returns a summary of all available inks including brand, name, color tags,
-        and whether they're already assigned for the current year.
+        and whether they're already assigned for the current year. Archived inks
+        are excluded since they aren't candidates for new assignments.
         """
         inks = _snapshot["inks"]
 
         if not inks:
             return {"success": False, "message": "No inks available in collection"}
+
+        inks = assignable_inks(inks)
 
         merged = _get_merged_assignments()
         assigned_macro_ids = set(merged.values())
@@ -545,6 +549,10 @@ def create_tool_functions(ink_data_reactive, selected_year_reactive,
 
         if not inks:
             return {"success": False, "message": "No inks available in collection"}
+
+        # Archived inks remain in the dataset for display only; they are not
+        # candidates for assignment / reshuffling so they're filtered here.
+        inks = assignable_inks(inks)
 
         api = _snapshot["api"]
         session = _snapshot["session"]

@@ -498,12 +498,36 @@ def find_ink_by_name(ink_name: str, inks: List[Dict]) -> Optional[tuple]:
     return None
 
 
+def assignable_inks(inks: List[Dict]) -> List[Dict]:
+    """
+    Return only inks eligible for new assignments (i.e. not archived).
+
+    Archived inks remain in the dataset so previously-set swatches still
+    appear on the calendar, but they must not be offered up for picking,
+    random selection, or assignment-style search. This helper is the
+    single source of truth for that "eligible for assignment" view.
+
+    Args:
+        inks: Full list of ink dictionaries
+
+    Returns:
+        New list containing only non-archived inks, preserving order
+        and dict identity.
+    """
+    return [ink for ink in inks if not ink.get("archived", False)]
+
+
 def search_inks(inks: List[Dict], year: int,
                 query: Optional[str] = None,
                 color: Optional[str] = None,
-                brand: Optional[str] = None) -> List[Dict]:
+                brand: Optional[str] = None,
+                include_archived: bool = False) -> List[Dict]:
     """
     Search inks by name, color tag, or brand.
+
+    By default archived inks are excluded because this function feeds
+    assignment-style flows (picker, chat tools). Pass include_archived=True
+    for display-style search across the full collection.
 
     Args:
         inks: List of ink dictionaries
@@ -511,6 +535,7 @@ def search_inks(inks: List[Dict], year: int,
         query: Optional text to search in ink names
         color: Optional color tag to filter by
         brand: Optional brand name to filter by
+        include_archived: Include archived inks in results (default False)
 
     Returns:
         List of matching ink info dictionaries
@@ -518,6 +543,9 @@ def search_inks(inks: List[Dict], year: int,
     matches = []
 
     for idx, ink in enumerate(inks):
+        if not include_archived and ink.get("archived", False):
+            continue
+
         # Apply filters (normalize apostrophes for LLM compatibility)
         if query:
             full_name = normalize_apostrophes(f"{ink.get('brand_name', '')} {ink.get('name', '')}").lower()
@@ -666,6 +694,18 @@ def move_ink_assignment(
 
     # === ASSIGN (from_date None, to_date set) ===
     if from_date is None:
+        # Refuse to assign archived inks to a new date. They remain in the
+        # dataset for display, but new assignments must come from the
+        # active/non-archived pool.
+        if inks:
+            lookup = find_ink_by_macro_cluster_id(macro_cluster_id, inks)
+            if lookup and lookup[1].get("archived", False):
+                return session, MoveResult(
+                    False,
+                    f"Cannot assign archived ink to {to_date}.",
+                    archived=True, to_date=to_date, **ink_info
+                )
+
         # Check if to_date is API-protected
         if to_date in api:
             return session, MoveResult(

@@ -232,5 +232,57 @@ def test_fetch_all_collected_inks_pagination_params(mock_get):
     assert call_kwargs["params"]["page[size]"] == 100
 
 
+@patch('api_client.requests.get')
+def test_fetch_all_collected_inks_includes_archived(mock_get):
+    """Archived inks must be returned from the API fetch.
+
+    They are kept in the dataset for display purposes (a swatched-then-
+    archived ink should still appear on the calendar). Filtering for
+    assignment eligibility happens elsewhere.
+    """
+    mock_response = Mock()
+    mock_response.json.return_value = {
+        "data": [
+            {
+                "id": "1",
+                "type": "collected_ink",
+                "attributes": {
+                    "brand_name": "Diamine",
+                    "ink_name": "Active Ink",
+                    "archived": False,
+                }
+            },
+            {
+                "id": "2",
+                "type": "collected_ink",
+                "attributes": {
+                    "brand_name": "Diamine",
+                    "ink_name": "Retired Ink",
+                    "archived": True,
+                }
+            }
+        ],
+        "meta": {
+            "pagination": {
+                "total_pages": 1,
+                "current_page": 1,
+                "next_page": None,
+                "prev_page": None
+            }
+        }
+    }
+    mock_response.raise_for_status = Mock()
+    mock_get.return_value = mock_response
+
+    inks = fetch_all_collected_inks("test_token")
+
+    assert len(inks) == 2
+    names = {ink["name"] for ink in inks}
+    assert names == {"Active Ink", "Retired Ink"}
+    # Ensure the archived flag is preserved so downstream filters can use it
+    archived_flags = {ink["name"]: ink["archived"] for ink in inks}
+    assert archived_flags == {"Active Ink": False, "Retired Ink": True}
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

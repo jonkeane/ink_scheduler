@@ -30,6 +30,7 @@ from assignment_logic import (
     remove_swatch_from_comment,
     get_ink_identifier,
     find_ink_by_macro_cluster_id,
+    assignable_inks,
 )
 from api_client import fetch_all_collected_inks, update_ink_private_comment, fetch_single_ink
 from ink_cache import save_inks_to_cache, load_inks_from_cache, get_cache_info
@@ -1387,6 +1388,9 @@ def server(input, output, session):
         inks = ink_data.get()
         if not inks:
             return ui.p("No inks loaded.")
+
+        # Archived inks remain in ink_data for display, but aren't pickable
+        inks = assignable_inks(inks)
 
         session = session_assignments.get()
         api = api_assignments.get()

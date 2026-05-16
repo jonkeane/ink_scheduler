@@ -70,6 +70,26 @@ def test_clear_cache(temp_cache, test_inks):
     assert not os.path.exists(temp_cache)
 
 
+def test_cache_preserves_archived_inks(temp_cache):
+    """Archived inks must be preserved through save/load.
+
+    They are needed for display (e.g. showing a swatch made earlier in the
+    year for an ink that has since been archived). Filtering is the
+    responsibility of assignment-eligibility helpers, not the cache.
+    """
+    inks = [
+        {"name": "Active Ink", "brand_name": "Brand", "archived": False},
+        {"name": "Archived Ink", "brand_name": "Brand", "archived": True},
+    ]
+    save_inks_to_cache(inks)
+
+    cache = load_inks_from_cache()
+    assert cache is not None
+    assert cache["ink_count"] == 2
+    names = {ink["name"] for ink in cache["inks"]}
+    assert names == {"Active Ink", "Archived Ink"}
+
+
 def test_cache_preserves_all_fields(temp_cache):
     """Test that cache preserves all ink fields."""
     inks = [

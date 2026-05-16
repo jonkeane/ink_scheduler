@@ -22,6 +22,7 @@ from assignment_logic import (
     get_ink_identifier,
     parse_ink_identifier,
     find_ink_by_identifier,
+    assignable_inks,
 )
 
 
@@ -1143,6 +1144,155 @@ class TestShuffleMonthAssignments:
         new_session, result = shuffle_month_assignments({}, {}, 2026, 3)
         assert result.success is False
         assert "found 0" in result.message
+
+
+# =============================================================================
+# Tests for archived-ink eligibility (display vs. assignment)
+#
+# Archived inks must remain in the dataset so previously-set swatches still
+# appear on the calendar. They must NOT be offered up for new assignments,
+# random picks, or assignment-style searches.
+# =============================================================================
+
+
+# --- assignable_inks ---------------------------------------------------------
+
+def test_assignable_inks_filters_archived():
+    """assignable_inks returns only non-archived inks."""
+    inks = [
+        {"name": "Active", "archived": False},
+        {"name": "Retired", "archived": True},
+        {"name": "Also Active"},  # no archived flag -> treated as not archived
+    ]
+    result = assignable_inks(inks)
+    names = [ink["name"] for ink in result]
+    assert names == ["Active", "Also Active"]
+
+
+def test_assignable_inks_preserves_order_and_identity():
+    """assignable_inks preserves source order and yields the same dict objects.
+
+    Downstream callers (e.g. ink pickers) rely on stable indexing/identity.
+    """
+    active1 = {"name": "A", "archived": False}
+    archived = {"name": "B", "archived": True}
+    active2 = {"name": "C", "archived": False}
+    result = assignable_inks([active1, archived, active2])
+    assert result == [active1, active2]
+    assert result[0] is active1
+    assert result[1] is active2
+
+
+def test_assignable_inks_empty():
+    assert assignable_inks([]) == []
+
+
+# --- search_inks excludes archived by default --------------------------------
+
+def test_search_inks_excludes_archived_by_default():
+    """search_inks feeds the picker; archived inks must not appear."""
+    inks = [
+        {"brand_name": "Diamine", "name": "Blue Velvet", "cluster_tags": ["blue"], "archived": False},
+        {"brand_name": "Diamine", "name": "Blue Mistake", "cluster_tags": ["blue"], "archived": True},
+    ]
+    results = search_inks(inks, 2026, query="blue")
+    names = [r["name"] for r in results]
+    assert names == ["Blue Velvet"]
+
+
+def test_search_inks_include_archived_opt_in():
+    """Callers that want display-style search can opt in via include_archived."""
+    inks = [
+        {"brand_name": "Diamine", "name": "Blue Velvet", "cluster_tags": ["blue"], "archived": False},
+        {"brand_name": "Diamine", "name": "Blue Mistake", "cluster_tags": ["blue"], "archived": True},
+    ]
+    results = search_inks(inks, 2026, query="blue", include_archived=True)
+    names = sorted(r["name"] for r in results)
+    assert names == ["Blue Mistake", "Blue Velvet"]
+
+
+# --- create_explicit_assignments_only keeps archived ------------------------
+
+def test_create_explicit_assignments_includes_archived():
+    """An archived ink with an existing swatch date keeps its calendar spot.
+
+    This is the whole point of leaving archived inks in the dataset.
+    """
+    inks = [
+        {
+            "macro_cluster_id": "active",
+            "archived": False,
+            "private_comment": '{"swatch2026": {"date": "2026-01-15"}}',
+        },
+        {
+            "macro_cluster_id": "retired",
+            "archived": True,
+            "private_comment": '{"swatch2026": {"date": "2026-02-20"}}',
+        },
+    ]
+    result = create_explicit_assignments_only(inks, 2026)
+    assert result == {
+        "2026-01-15": "macro:active",
+        "2026-02-20": "macro:retired",
+    }
+
+
+# --- move_ink_assignment refuses to assign archived inks --------------------
+
+def test_move_assign_refuses_archived_ink():
+    """Assigning an archived ink to a new date must fail.
+
+    Archived inks are display-only; the user shouldn't be able to assign one
+    a fresh date through the picker, chat tool, etc.
+    """
+    inks = [
+        {"macro_cluster_id": "retired", "archived": True, "name": "Retired"},
+    ]
+    new_session, result = move_ink_assignment(
+        session={},
+        api={},
+        from_date=None,
+        to_date="2026-03-01",
+        macro_cluster_id="macro:retired",
+        inks=inks,
+    )
+    assert result.success is False
+    assert "archived" in result.message.lower()
+    assert new_session == {}
+
+
+def test_move_assign_allows_active_ink():
+    """Sanity check: non-archived inks still assign normally."""
+    inks = [
+        {"macro_cluster_id": "active", "archived": False, "name": "Active"},
+    ]
+    new_session, result = move_ink_assignment(
+        session={},
+        api={},
+        from_date=None,
+        to_date="2026-03-01",
+        macro_cluster_id="macro:active",
+        inks=inks,
+    )
+    assert result.success is True
+    assert new_session == {"2026-03-01": "macro:active"}
+
+
+def test_move_existing_archived_assignment_can_still_be_unassigned():
+    """If a session-assigned ink later gets archived, the user should still
+    be able to unassign it (cleanup case)."""
+    inks = [
+        {"macro_cluster_id": "retired", "archived": True, "name": "Retired"},
+    ]
+    new_session, result = move_ink_assignment(
+        session={"2026-03-01": "macro:retired"},
+        api={},
+        from_date="2026-03-01",
+        to_date=None,
+        inks=inks,
+    )
+    assert result.success is True
+    assert new_session == {}
 
 
 if __name__ == "__main__":
